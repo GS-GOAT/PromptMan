@@ -1,0 +1,306 @@
+import React, { useState, useEffect, useRef } from 'react';
+import './App.css';
+
+// Base URL for API - Change this to match your backend URL
+const API_BASE_URL = "http://localhost:8000";
+
+function App() {
+  // State for file uploader
+  const [files, setFiles] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [jobId, setJobId] = useState(null);
+  const [jobStatus, setJobStatus] = useState(null);
+  const [error, setError] = useState(null);
+  const fileInputRef = useRef(null);
+  
+  // Polling interval for job status (in milliseconds)
+  const STATUS_POLL_INTERVAL = 2000;
+  const STATUS_POLL_MAX_TIME = 30 * 60 * 1000; // 30 minutes
+  
+  // Effect to poll for job status
+  useEffect(() => {
+    let intervalId;
+    let startTime;
+    
+    const checkJobStatus = async () => {
+      if (!jobId) return;
+      
+      try {
+        const response = await fetch(`${API_BASE_URL}/api/job-status/${jobId}`);
+        
+        if (!response.ok) {
+          throw new Error(`Error checking job status: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        setJobStatus(data);
+        
+        // If job is completed or failed, stop polling
+        if (data.status === 'completed' || data.status === 'failed') {
+          clearInterval(intervalId);
+          console.log(`Job ${data.status}: `, data);
+        }
+        
+        // Check if we've exceeded the maximum poll time
+        const currentTime = new Date().getTime();
+        if (currentTime - startTime > STATUS_POLL_MAX_TIME) {
+          clearInterval(intervalId);
+          console.warn('Job status polling exceeded maximum time limit');
+        }
+      } catch (err) {
+        console.error('Error checking job status:', err);
+        setError(err.message);
+        clearInterval(intervalId);
+      }
+    };
+    
+    if (jobId) {
+      startTime = new Date().getTime();
+      // Check immediately, then start polling
+      checkJobStatus();
+      intervalId = setInterval(checkJobStatus, STATUS_POLL_INTERVAL);
+    }
+    
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [jobId]);
+  
+  // Handle file selection
+  const handleFileSelect = (event) => {
+    const fileList = event.target.files || [];
+    processFiles(fileList);
+  };
+  
+  // Process files and extract relative paths
+  const processFiles = (fileList) => {
+    const newFiles = Array.from(fileList);
+    console.log('Selected files:', newFiles);
+    setFiles(newFiles);
+  };
+  
+  // Handle drag events
+  const handleDragOver = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(true);
+  };
+  
+  const handleDragLeave = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(false);
+  };
+  
+  const handleDrop = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragging(false);
+    
+    const items = event.dataTransfer.items;
+    const files = event.dataTransfer.files;
+    
+    // WebkitGetAsEntry is used to check if an item is a directory
+    if (items && items.length > 0) {
+      processFiles(files);
+    }
+  };
+  
+  // Handle browse files button click
+  const handleBrowseClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+  
+  // Handle upload button click
+  const handleUpload = async () => {
+    if (files.length === 0) {
+      setError('No files selected');
+      return;
+    }
+    
+    setIsUploading(true);
+    setError(null);
+    
+    const formData = new FormData();
+    
+    files.forEach(file => {
+      // For files, maintain their directory structure
+      let relativePath = file.webkitRelativePath || file.name;
+      formData.append('files', file, relativePath);
+    });
+    
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/upload-codebase`, {
+        method: 'POST',
+        body: formData,
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Upload failed: ${response.statusText}`);
+      }
+      
+      const data = await response.json();
+      console.log('Upload successful', data);
+      setJobId(data.job_id);
+      
+      // Reset uploader
+      setFiles([]);
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    } catch (err) {
+      console.error('Error uploading files:', err);
+      setError(err.message);
+    } finally {
+      setIsUploading(false);
+    }
+  };
+  
+  // Handle download
+  const handleDownload = () => {
+    if (!jobId || !jobStatus || jobStatus.status !== 'completed') return;
+    
+    window.location.href = `${API_BASE_URL}/api/download/${jobId}`;
+  };
+  
+  // Reset state
+  const handleReset = () => {
+    setFiles([]);
+    setJobId(null);
+    setJobStatus(null);
+    setError(null);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+  
+  return (
+    <div className="app-container">
+      <header className="app-header">
+        <h1 className="app-title">PromptMan</h1>
+        <p className="app-subtitle">Generate LLM prompts from your codebase</p>
+      </header>
+      
+      <section className="upload-container">
+        <h2 className="upload-title">Upload Your Code</h2>
+        <p className="upload-description">
+          Upload your code folder to generate a comprehensive prompt that describes the codebase.
+        </p>
+        
+        {!jobId && (
+          <>
+            <div 
+              className={`drop-zone ${isDragging ? 'active' : ''}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={handleBrowseClick}
+            >
+              <p className="drop-zone-text">Drag & drop your code folder here</p>
+              <p>or</p>
+              <button className="upload-btn">Browse Files</button>
+              <input 
+                type="file" 
+                ref={fileInputRef}
+                className="file-input" 
+                onChange={handleFileSelect}
+                webkitdirectory="true" 
+                directory="true"
+                multiple
+              />
+            </div>
+            
+            {files.length > 0 && (
+              <>
+                <div className="files-list">
+                  <p>Selected {files.length} file(s)</p>
+                  {files.slice(0, 5).map((file, index) => (
+                    <div key={index} className="files-list-item">
+                      {file.webkitRelativePath || file.name}
+                    </div>
+                  ))}
+                  {files.length > 5 && (
+                    <div className="files-list-item">
+                      ... and {files.length - 5} more files
+                    </div>
+                  )}
+                </div>
+                
+                <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+                  <button 
+                    className={`upload-btn ${isUploading ? 'btn-disabled' : ''}`}
+                    onClick={handleUpload}
+                    disabled={isUploading}
+                  >
+                    {isUploading ? 'Uploading...' : 'Process Files'}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </section>
+      
+      {error && (
+        <div className="status-container">
+          <div className="status-card failed">
+            <div className="status-label">Error</div>
+            <div className="status-error">{error}</div>
+            <button className="upload-btn" onClick={handleReset} style={{ marginTop: '1rem' }}>
+              Start Over
+            </button>
+          </div>
+        </div>
+      )}
+      
+      {jobId && (
+        <section className="status-container">
+          <h2 className="status-title">Processing Status</h2>
+          
+          <div className={`status-card ${jobStatus?.status || 'uploading'}`}>
+            <div className="status-label">Status</div>
+            <div className="status-text">
+              {jobStatus?.status === 'pending' && 'Queued'}
+              {jobStatus?.status === 'uploading' && 'Uploading Files'}
+              {jobStatus?.status === 'processing' && 'Processing Code'}
+              {jobStatus?.status === 'completed' && 'Processing Complete'}
+              {jobStatus?.status === 'failed' && 'Processing Failed'}
+              {!jobStatus?.status && 'Initializing...'}
+            </div>
+            
+            {(jobStatus?.status === 'uploading' || jobStatus?.status === 'processing') && (
+              <div className="progress-container">
+                <div className="progress-bar pulse" style={{ width: '100%' }}></div>
+              </div>
+            )}
+            
+            {jobStatus?.status === 'failed' && jobStatus.error && (
+              <div className="status-error">{jobStatus.error}</div>
+            )}
+            
+            {jobStatus?.status === 'completed' && (
+              <button className="download-btn" onClick={handleDownload}>
+                Download Result
+              </button>
+            )}
+            
+            {(jobStatus?.status === 'completed' || jobStatus?.status === 'failed') && (
+              <button className="upload-btn" onClick={handleReset} style={{ marginTop: '1rem', marginLeft: '0.5rem' }}>
+                Start New Job
+              </button>
+            )}
+          </div>
+          
+          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: '#7f8c8d' }}>
+            Job ID: {jobId}
+          </div>
+        </section>
+      )}
+    </div>
+  );
+}
+
+export default App; 

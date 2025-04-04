@@ -1,0 +1,75 @@
+# Python
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/temp/*
+!backend/temp/.gitkeep
+backend/results/*
+!backend/results/.gitkeep
+
+# Node
+frontend/node_modules/
+frontend/build/
+frontend/.pnp*
+frontend/.yarn*
+frontend/coverage/
+frontend/*.log
+.env
+.env.*
+*.env.local
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Python cache files
+__pycache__/
+*.py[cod]
+
+# Virtual environment
+/backend/venv/
+*.env
+
+# Distribution / packaging
+.Python
+/build/
+dist/
+downloads/
+lib/
+lib64/
+parts/
+sdist/
+var/
+.installed.cfg
+
+# Node modules
+/frontend/node_modules/
+npm-debug.log
+yarn-error.log
+
+# Temporary files and directories
+/backend/temp/
+/backend/results/
+
+# Deployment files
+/deployment/*.service
+/deployment/nginx.conf
+
+# Pytest cache
+.cache/
+.pytest_cache/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints
+
+# IDE specific files
+.vscode/
+.idea/
+*.swp
+
+# Logs
+*.log
+
+# Other files
+*.pyo
+*.pyd
