@@ -69,9 +69,9 @@ async def run_code2prompt(directory: str):
          raise RuntimeError(f"Failed to verify code2prompt installation: {e}")
 
     # --- Execute code2prompt on the Directory ---
-    # Command: code2prompt <directory_path>
-    # We capture stdout for the result. Add other flags as needed (e.g., --no-ignore).
-    cmd = ["code2prompt", directory]
+    # Based on the error message, we need to use the --path flag
+    # instead of a positional argument
+    cmd = ["code2prompt", "--path", directory]
     logger.info(f"Executing command: {' '.join(cmd)}")
 
     try:
