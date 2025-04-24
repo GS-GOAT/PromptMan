@@ -184,118 +184,124 @@ function App() {
         <p className="app-subtitle">Generate LLM prompts from your codebase</p>
       </header>
       
-      <section className="upload-container">
-        <h2 className="upload-title">Upload Your Code</h2>
-        <p className="upload-description">
-          Upload your code folder to generate a comprehensive prompt that describes the codebase.
-        </p>
-        
-        {!jobId && (
-          <>
-            <div 
-              className={`drop-zone ${isDragging ? 'active' : ''}`}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-              onClick={handleBrowseClick}
-            >
-              <p className="drop-zone-text">Drag & drop your code folder here</p>
-              <p>or</p>
-              <button className="upload-btn">Browse Files</button>
-              <input 
-                type="file" 
-                ref={fileInputRef}
-                className="file-input" 
-                onChange={handleFileSelect}
-                webkitdirectory="true" 
-                directory="true"
-                multiple
-              />
-            </div>
-            
-            {files.length > 0 && (
-              <>
-                <div className="files-list">
-                  <p>Selected {files.length} file(s)</p>
-                  {files.slice(0, 5).map((file, index) => (
-                    <div key={index} className="files-list-item">
-                      {file.webkitRelativePath || file.name}
-                    </div>
-                  ))}
-                  {files.length > 5 && (
-                    <div className="files-list-item">
-                      ... and {files.length - 5} more files
-                    </div>
-                  )}
-                </div>
-                
-                <div style={{ marginTop: '1rem', textAlign: 'center' }}>
-                  <button 
-                    className={`upload-btn ${isUploading ? 'btn-disabled' : ''}`}
-                    onClick={handleUpload}
-                    disabled={isUploading}
-                  >
-                    {isUploading ? 'Uploading...' : 'Process Files'}
-                  </button>
-                </div>
-              </>
-            )}
-          </>
-        )}
+      <section className="section-container">
+        <div className="section-content">
+          <h2 className="section-title">Upload Your Code</h2>
+          <p className="section-description">
+            Upload your code folder to generate a comprehensive prompt that describes the codebase.
+          </p>
+          
+          {!jobId && (
+            <>
+              <div 
+                className={`drop-zone ${isDragging ? 'active' : ''}`}
+                onDragOver={handleDragOver}
+                onDragLeave={handleDragLeave}
+                onDrop={handleDrop}
+                onClick={handleBrowseClick}
+              >
+                <p className="drop-zone-text">Drag & drop your code folder here</p>
+                <p style={{color: 'var(--text-muted)'}}>or</p>
+                <button className="btn">Browse Files</button>
+                <input 
+                  type="file" 
+                  ref={fileInputRef}
+                  className="file-input" 
+                  onChange={handleFileSelect}
+                  webkitdirectory="true" 
+                  directory="true"
+                  multiple
+                />
+              </div>
+              
+              {files.length > 0 && (
+                <>
+                  <div className="files-list">
+                    <p>Selected {files.length} file(s)</p>
+                    {files.slice(0, 5).map((file, index) => (
+                      <div key={index} className="files-list-item">
+                        {file.webkitRelativePath || file.name}
+                      </div>
+                    ))}
+                    {files.length > 5 && (
+                      <div className="files-list-item">
+                        ... and {files.length - 5} more files
+                      </div>
+                    )}
+                  </div>
+                  
+                  <div style={{ marginTop: '1rem', textAlign: 'center' }}>
+                    <button 
+                      className={`btn ${isUploading ? 'btn-disabled' : ''}`}
+                      onClick={handleUpload}
+                      disabled={isUploading}
+                    >
+                      {isUploading ? 'Uploading...' : 'Process Files'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </div>
       </section>
       
       {error && (
-        <div className="status-container">
-          <div className="status-card failed">
-            <div className="status-label">Error</div>
-            <div className="status-error">{error}</div>
-            <button className="upload-btn" onClick={handleReset} style={{ marginTop: '1rem' }}>
-              Start Over
-            </button>
+        <section className="section-container">
+          <div className="section-content">
+            <div className="status-card failed">
+              <div className="status-label">Error</div>
+              <div className="status-error">{error}</div>
+              <button className="btn btn-reset" onClick={handleReset} style={{ marginTop: '1rem' }}>
+                Start Over
+              </button>
+            </div>
           </div>
-        </div>
+        </section>
       )}
       
       {jobId && (
-        <section className="status-container">
-          <h2 className="status-title">Processing Status</h2>
-          
-          <div className={`status-card ${jobStatus?.status || 'uploading'}`}>
-            <div className="status-label">Status</div>
-            <div className="status-text">
-              {jobStatus?.status === 'pending' && 'Queued'}
-              {jobStatus?.status === 'uploading' && 'Uploading Files'}
-              {jobStatus?.status === 'processing' && 'Processing Code'}
-              {jobStatus?.status === 'completed' && 'Processing Complete'}
-              {jobStatus?.status === 'failed' && 'Processing Failed'}
-              {!jobStatus?.status && 'Initializing...'}
+        <section className="section-container">
+          <div className="section-content">
+            <h2 className="section-title">Processing Status</h2>
+            
+            <div className={`status-card ${jobStatus?.status || 'uploading'}`}>
+              <div className="status-label">Status</div>
+              <div className="status-text">
+                {jobStatus?.status === 'pending' && 'Queued'}
+                {jobStatus?.status === 'uploading' && 'Uploading Files'}
+                {jobStatus?.status === 'processing' && 'Processing Code'}
+                {jobStatus?.status === 'completed' && 'Processing Complete'}
+                {jobStatus?.status === 'failed' && 'Processing Failed'}
+                {!jobStatus?.status && 'Initializing...'}
+              </div>
+              
+              {(jobStatus?.status === 'uploading' || jobStatus?.status === 'processing') && (
+                <div className="progress-container">
+                  <div className="progress-bar pulse" style={{ width: '100%' }}></div>
+                </div>
+              )}
+              
+              {jobStatus?.status === 'failed' && jobStatus.error && (
+                <div className="status-error">{jobStatus.error}</div>
+              )}
+              
+              {jobStatus?.status === 'completed' && (
+                <button className="btn btn-download" onClick={handleDownload} style={{ marginTop: '1rem' }}>
+                  Download Result
+                </button>
+              )}
+              
+              {(jobStatus?.status === 'completed' || jobStatus?.status === 'failed') && (
+                <button className="btn btn-reset" onClick={handleReset} style={{ marginTop: '1rem', marginLeft: '0.5rem' }}>
+                  Start New Job
+                </button>
+              )}
             </div>
             
-            {(jobStatus?.status === 'uploading' || jobStatus?.status === 'processing') && (
-              <div className="progress-container">
-                <div className="progress-bar pulse" style={{ width: '100%' }}></div>
-              </div>
-            )}
-            
-            {jobStatus?.status === 'failed' && jobStatus.error && (
-              <div className="status-error">{jobStatus.error}</div>
-            )}
-            
-            {jobStatus?.status === 'completed' && (
-              <button className="download-btn" onClick={handleDownload}>
-                Download Result
-              </button>
-            )}
-            
-            {(jobStatus?.status === 'completed' || jobStatus?.status === 'failed') && (
-              <button className="upload-btn" onClick={handleReset} style={{ marginTop: '1rem', marginLeft: '0.5rem' }}>
-                Start New Job
-              </button>
-            )}
-          </div>
-          
-          <div style={{ marginTop: '1rem', fontSize: '0.8rem', color: '#7f8c8d' }}>
-            Job ID: {jobId}
+            <div className="job-id-display">
+              Job ID: {jobId}
+            </div>
           </div>
         </section>
       )}
