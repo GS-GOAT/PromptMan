@@ -1,0 +1,50 @@
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: promptman_redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    networks:
+      - promptman_net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: promptman_backend
+    restart: unless-stopped
+    depends_on:
+      - redis
+    env_file:
+      - .env
+    volumes:
+      - ./backend/results:/app/results
+    networks:
+      - promptman_net
+    expose:
+      - "${PORT:-8000}"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        REACT_APP_API_BASE_URL: /api
+    container_name: promptman_frontend_nginx
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${NGINX_PORT:-80}:80"
+    networks:
+      - promptman_net
+
+networks:
+  promptman_net:
+    driver: bridge
+
+volumes:
+  redis_data:
+    driver: local

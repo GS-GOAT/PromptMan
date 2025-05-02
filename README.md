@@ -13,9 +13,12 @@ PromptMan is a web application that converts codebases into comprehensive LLM pr
 
 ```
 PromptMan/
+├── .env                  # Environment configuration
 ├── .gitignore
+├── docker-compose.yml    # Docker services orchestration
 ├── backend/
-│   ├── main.py
+│   ├── Dockerfile       # Backend multi-stage build
+│   ├── main.py         # FastAPI application
 │   ├── requirements.txt
 │   ├── services/
 │   │   └── code_service.py
@@ -24,6 +27,8 @@ PromptMan/
 │   └── results/
 │       └── .gitkeep
 └── frontend/
+    ├── Dockerfile      # Frontend build + Nginx
+    ├── nginx.conf      # Nginx reverse proxy config
     ├── public/
     │   └── index.html
     ├── src/
@@ -36,78 +41,123 @@ PromptMan/
 
 ## Prerequisites
 
-- Python 3.8+
-- Node.js 14+
-- `code2prompt` CLI tool installed in your environment
+- Docker
+- Docker Compose
 
-## Setup & Installation
+## Configuration
 
-### Backend
-
-1. Navigate to the backend directory:
+1. Copy `.env.example` to `.env` if it exists, or create a new `.env` file:
    ```
+   # Backend Configuration
+   PORT=8000
+   REDIS_HOST=redis
+   REDIS_PORT=6379
+   ALLOWED_ORIGINS=http://localhost,http://localhost:80
+   PYTHONUNBUFFERED=1
+
+   # Frontend/Nginx Configuration
+   NGINX_PORT=80
+   ```
+
+2. Adjust values in `.env` as needed:
+   - `NGINX_PORT`: Change if port 80 is already in use
+   - `ALLOWED_ORIGINS`: Add your domain in production
+
+## Building and Running
+
+1. Build the containers:
+   ```bash
+   docker-compose build
+   ```
+
+2. Start the services:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. Access the application:
+   - Development: http://localhost (or http://localhost:${NGINX_PORT} if you changed it)
+   - Production: https://your-domain.com
+
+4. View logs (optional):
+   ```bash
+   docker-compose logs -f
+   ```
+
+5. Stop the services:
+   ```bash
+   docker-compose down
+   ```
+
+## Architecture
+
+- Frontend: React application served by Nginx
+- Backend: FastAPI + Gunicorn/Uvicorn workers
+- Storage: Redis for job data, local filesystem for results
+- Proxy: Nginx reverse proxy for API requests
+
+## Development
+
+To develop locally without Docker:
+
+1. Backend:
+   ```bash
    cd backend
-   ```
-
-2. Create a Python virtual environment:
-   ```
    python -m venv venv
-   ```
-
-3. Activate the virtual environment:
-   - On Windows: `venv\Scripts\activate`
-   - On macOS/Linux: `source venv/bin/activate`
-
-4. Install dependencies:
-   ```
+   source venv/bin/activate  # or venv\Scripts\activate on Windows
    pip install -r requirements.txt
-   ```
-
-5. Ensure `code2prompt` is installed:
-   ```
-   pip install code2prompt
-   ```
-
-### Frontend
-
-1. Navigate to the frontend directory:
-   ```
-   cd frontend
-   ```
-
-2. Install dependencies:
-   ```
-   npm install
-   ```
-
-## Running the Application
-
-### Start the Backend
-
-1. Navigate to the backend directory with the virtual environment activated
-2. Run:
-   ```
    uvicorn main:app --reload --port 8000
    ```
 
-### Start the Frontend
-
-1. Navigate to the frontend directory
-2. Run:
-   ```
+2. Frontend:
+   ```bash
+   cd frontend
+   npm install
    npm start
    ```
 
-3. Open your browser to http://localhost:3000
+## Production Deployment
 
-## Usage
+For production deployment:
 
-1. Upload a code folder using the drag & drop interface or the file browser
-2. Wait for the processing to complete
-3. Download the resulting Markdown file
+1. Update `.env` with production settings:
+   - Set `ALLOWED_ORIGINS` to your domain
+   - Consider using different ports if needed
 
-## API Endpoints
+2. Setup HTTPS (recommended):
+   - Install Certbot
+   - Obtain SSL certificate
+   - Update Nginx configuration
+   - Mount SSL certificates into the frontend container
 
-- `POST /api/upload-codebase`: Upload code files
-- `GET /api/job-status/{job_id}`: Check job status
-- `GET /api/download/{job_id}`: Download processed result 
+3. Enable firewall rules:
+   ```bash
+   sudo ufw allow 80/tcp
+   sudo ufw allow 443/tcp
+   ```
+
+4. Deploy:
+   ```bash
+   docker-compose -f docker-compose.yml up -d
+   ```
+
+5. Monitor:
+   ```bash
+   docker-compose logs -f
+   ```
+
+## Maintenance
+
+- **Backups**: Regularly back up the Redis volume (`redis_data`)
+- **Updates**: 
+  1. Pull latest code changes
+  2. Rebuild images: `docker-compose build`
+  3. Restart services: `docker-compose up -d`
+- **Cleanup**: 
+  - Old results: Automatically cleaned up after 24 hours
+  - Containers: `docker-compose down` to stop and remove
+  - Volumes: Add `-v` to remove persistent data: `docker-compose down -v`
+
+## License
+
+[Your license here]

@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import './App.css';
 
-// Base URL for API - Change this to match your backend URL
-const API_BASE_URL = "http://localhost:8000";
+// Base URL for API - Use environment variable provided during Docker build
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "/api";
 
 function App() {
   // State for file uploader
@@ -309,4 +309,4 @@ function App() {
   );
 }
 
-export default App; 
+export default App;

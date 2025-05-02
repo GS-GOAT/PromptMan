@@ -7,6 +7,7 @@ import traceback
 import time
 import tempfile
 import uuid
+import shutil
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -14,27 +15,23 @@ logging.basicConfig(level=logging.INFO,
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-# Timeout for the entire code2prompt process (adjust as needed)
-CODE2PROMPT_TIMEOUT_SECONDS = 300 # 5 minutes
+CODE2PROMPT_TIMEOUT_SECONDS = 300  # 5 minutes
 
-# --- Explicit Path to the Cargo-installed executable --- START
-# Replace this with the actual path from `which code2prompt` if different
-CARGO_CODE2PROMPT_PATH = "/home/gs_goat/.cargo/bin/code2prompt"
+# --- Find code2prompt Executable ---
+CODE2PROMPT_EXECUTABLE = shutil.which("code2prompt")
 
-# Check if it exists
-if not os.path.isfile(CARGO_CODE2PROMPT_PATH):
-    logger.error(f"Cannot find the cargo-installed code2prompt at {CARGO_CODE2PROMPT_PATH}")
-    # Set to a value that will cause FileNotFoundError later if check fails
-    CODE2PROMPT_EXECUTABLE = "__CARGO_PATH_INVALID__"
+if not CODE2PROMPT_EXECUTABLE:
+    logger.error("Cannot find 'code2prompt' executable in PATH. Ensure it's installed and accessible.")
+    CODE2PROMPT_EXECUTABLE = "__EXECUTABLE_NOT_FOUND__"
 else:
-    logger.info(f"Using cargo-installed code2prompt executable: {CARGO_CODE2PROMPT_PATH}")
-    CODE2PROMPT_EXECUTABLE = CARGO_CODE2PROMPT_PATH
-# --- Explicit Path to the Cargo-installed executable --- END
+    logger.info(f"Found code2prompt executable at: {CODE2PROMPT_EXECUTABLE}")
 
 def run_code2prompt_sync(directory: str):
-    """Synchronous function using the cargo executable, positional PATH and --output-file."""
+    """Synchronous function using the dynamically found executable."""
+    if CODE2PROMPT_EXECUTABLE == "__EXECUTABLE_NOT_FOUND__":
+        return "# Error: Executable Not Found\n\nCould not find code2prompt executable in PATH."
+
     temp_output_filename = os.path.join(tempfile.gettempdir(), f"code2prompt_{uuid.uuid4()}.md")
-    # Use cargo executable, positional path, and --output-file (assuming this works for cargo version)
     cmd = [CODE2PROMPT_EXECUTABLE, directory, "--output-file", temp_output_filename]
 
     logger.info(f"Executing command synchronously: {' '.join(cmd)}")
@@ -52,7 +49,7 @@ def run_code2prompt_sync(directory: str):
         )
         process_end_time = time.time()
         process_duration = process_end_time - process_start_time
-        logger.info(f"Synchronous code2prompt (Cargo + Positional PATH + --output-file) subprocess finished in {process_duration:.2f} seconds.")
+        logger.info(f"Synchronous code2prompt subprocess finished in {process_duration:.2f} seconds.")
 
         if process.returncode == 0:
             logger.info(f"code2prompt successfully processed directory {directory} to {temp_output_filename}")
@@ -65,10 +62,10 @@ def run_code2prompt_sync(directory: str):
                 error_occurred = True
                 output_content = f"# Error: Failed to Read Output File\n\nCould not read the temporary result file: {read_error}"
             if process.stderr:
-                 stderr_lines = process.stderr.splitlines()
-                 filtered_stderr = "\n".join(line for line in stderr_lines if "copied to clipboard" not in line.lower())
-                 if filtered_stderr.strip():
-                      logger.warning(f"code2prompt stderr output (even on success):\n{filtered_stderr}")
+                stderr_lines = process.stderr.splitlines()
+                filtered_stderr = "\n".join(line for line in stderr_lines if "copied to clipboard" not in line.lower())
+                if filtered_stderr.strip():
+                    logger.warning(f"code2prompt stderr output (even on success):\n{filtered_stderr}")
         else:
             error_occurred = True
             error_message = process.stderr.strip() if process.stderr else "No error output."
@@ -79,7 +76,6 @@ def run_code2prompt_sync(directory: str):
         logger.error(f"code2prompt timed out after {CODE2PROMPT_TIMEOUT_SECONDS} seconds processing directory: {directory}")
         output_content = f"# Error: Processing Timeout\n\nThe analysis of directory `{directory}` exceeded the time limit of {CODE2PROMPT_TIMEOUT_SECONDS} seconds."
     except FileNotFoundError:
-        # Specifically catch if the cargo executable wasn't found
         error_occurred = True
         logger.error(f"Executable not found at {CODE2PROMPT_EXECUTABLE}. Ensure the path is correct.")
         output_content = f"# Error: Executable Not Found\n\nCould not find code2prompt executable at specified path: {CODE2PROMPT_EXECUTABLE}"
@@ -99,8 +95,7 @@ def run_code2prompt_sync(directory: str):
 
 async def run_code2prompt(directory: str):
     """
-    Run Code2Prompt using the explicitly specified cargo executable path.
-    Uses positional PATH and --output-file flag.
+    Run Code2Prompt using the dynamically found executable.
     """
     logger.info(f"Starting 'at once' code analysis for directory: {directory}")
 
@@ -115,60 +110,53 @@ async def run_code2prompt(directory: str):
         logger.warning(f"Input directory {directory} is empty or contains no files.")
         return f"# Warning: No Files to Analyze\n\nThe directory `{directory}` contains no files to analyze."
 
-    # --- Check code2prompt Availability (using explicit cargo path) ---
+    # --- Check code2prompt Availability ---
     try:
-        if CODE2PROMPT_EXECUTABLE == "__CARGO_PATH_INVALID__":
-             raise FileNotFoundError(f"Cargo path {CARGO_CODE2PROMPT_PATH} was invalid.")
+        if CODE2PROMPT_EXECUTABLE == "__EXECUTABLE_NOT_FOUND__":
+            raise FileNotFoundError("code2prompt executable not found in PATH.")
 
-        logger.info(f"Checking availability of cargo executable: {CODE2PROMPT_EXECUTABLE}")
+        logger.info(f"Checking availability of executable: {CODE2PROMPT_EXECUTABLE}")
         version_process = await asyncio.create_subprocess_exec(
-            CODE2PROMPT_EXECUTABLE, "--version", # Use explicit cargo path
+            CODE2PROMPT_EXECUTABLE, "--version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
         stdout_v, stderr_v = await asyncio.wait_for(version_process.communicate(), timeout=10)
         if version_process.returncode != 0:
-            # Handle potential --version flag difference in cargo version if necessary
             err_msg = stderr_v.decode().strip() if stderr_v else "Unknown error checking version"
-            # Try -V as fallback for version check if --version fails for cargo version
             if "No such option: --version" in err_msg:
-                 logger.info("Retrying version check with -V for cargo executable")
-                 version_process = await asyncio.create_subprocess_exec(
-                      CODE2PROMPT_EXECUTABLE, "-V",
-                      stdout=asyncio.subprocess.PIPE,
-                      stderr=asyncio.subprocess.PIPE
-                 )
-                 stdout_v, stderr_v = await asyncio.wait_for(version_process.communicate(), timeout=10)
-                 if version_process.returncode != 0:
-                      err_msg = stderr_v.decode().strip() if stderr_v else "Unknown error checking version with -V"
-                      raise RuntimeError(f"code2prompt command error during version check (-V): {err_msg}")
+                logger.info("Retrying version check with -V for cargo executable")
+                version_process = await asyncio.create_subprocess_exec(
+                    CODE2PROMPT_EXECUTABLE, "-V",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE
+                )
+                stdout_v, stderr_v = await asyncio.wait_for(version_process.communicate(), timeout=10)
+                if version_process.returncode != 0:
+                    err_msg = stderr_v.decode().strip() if stderr_v else "Unknown error checking version with -V"
+                    raise RuntimeError(f"code2prompt command error during version check (-V): {err_msg}")
             else:
-                 raise RuntimeError(f"code2prompt command error during version check (--version): {err_msg}")
+                raise RuntimeError(f"code2prompt command error during version check (--version): {err_msg}")
 
         reported_version = stdout_v.decode().strip()
-        logger.info(f"Using code2prompt version reported by cargo executable: {reported_version}")
-        # Check if it looks like v3+
+        logger.info(f"Using code2prompt version: {reported_version}")
         if not reported_version.startswith("code2prompt 3."):
-             logger.warning(f"Reported version '{reported_version}' from cargo executable does not look like v3.x")
+            logger.warning(f"Reported version '{reported_version}' does not look like v3.x")
 
     except FileNotFoundError:
-         # This handles both the initial check and the fallback case
-         logger.error(f"`{CODE2PROMPT_EXECUTABLE}` not found. Ensure cargo executable path is correct and exists.")
-         return f"# Error: Executable Not Found\n\nCould not find code2prompt executable at specified path: {CODE2PROMPT_EXECUTABLE}"
+        logger.error(f"`{CODE2PROMPT_EXECUTABLE}` not found. Ensure executable path is correct and exists.")
+        return f"# Error: Executable Not Found\n\nCould not find code2prompt executable at specified path: {CODE2PROMPT_EXECUTABLE}"
     except asyncio.TimeoutError:
-         logger.error("Timeout checking code2prompt version.")
-         # Don't raise, let execution attempt continue
-         pass
+        logger.error("Timeout checking code2prompt version.")
+        pass  # Don't raise, let execution attempt continue
     except Exception as e:
-         logger.error(f"Error checking code2prompt at {CODE2PROMPT_EXECUTABLE}: {e}", exc_info=True)
-         # Allow execution to continue, run_code2prompt_sync will handle errors
-         pass
+        logger.error(f"Error checking code2prompt at {CODE2PROMPT_EXECUTABLE}: {e}", exc_info=True)
+        pass  # Allow execution to continue, run_code2prompt_sync will handle errors
 
     # --- Execute code2prompt using synchronous call in thread ---
     try:
-        # Run the synchronous function (using explicit cargo executable path)
         result = await asyncio.to_thread(run_code2prompt_sync, directory)
-        return result # run_code2prompt_sync now returns error strings directly
+        return result
     except Exception as e:
         logger.error(f"Error executing code2prompt via thread: {e}", exc_info=True)
-        return f"# Error: Thread Execution Failed\n\nAn error occurred during processing via thread:\n```\n{traceback.format_exc()}\n```" 
+        return f"# Error: Thread Execution Failed\n\nAn error occurred during processing via thread:\n```\n{traceback.format_exc()}\n```"
