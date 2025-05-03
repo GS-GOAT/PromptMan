@@ -20,7 +20,7 @@ from services.code_service import run_code2prompt
 TEMP_DIR = "temp"
 RESULTS_DIR = "results"
 CLEANUP_AGE_SECONDS = 24 * 60 * 60  # 24 hours
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # Default for local fallback if needed
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 3600  # Keep job data slightly longer than files
 
@@ -33,12 +33,17 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="PromptMan Direct API")
 
 # --- Redis Connection ---
+redis_client = None  # Initialize as None
 try:
+    # Connect using Host and Port
     redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-    redis_client.ping()
+    redis_client.ping()  # Verify connection
     logger.info(f"Successfully connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
 except redis.exceptions.ConnectionError as e:
     logger.error(f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT} - {e}")
+    redis_client = None  # Ensure it's None on failure
+except Exception as e:  # Catch other potential errors
+    logger.error(f"Failed to initialize Redis client - {e}")
     redis_client = None
 
 # --- CORS Middleware ---
