@@ -28,10 +28,10 @@ COPY --from=build /app/build /usr/share/nginx/html
 RUN rm /etc/nginx/conf.d/default.conf
 
 # Copy custom Nginx configuration
-COPY nginx.conf /etc/nginx/conf.d/
+COPY nginx.conf /etc/nginx/templates/nginx.conf.template
 
 # Expose port 80
 EXPOSE 80
 
-# Start Nginx
-CMD ["nginx", "-g", "daemon off;"]
+# Use envsubst to process the nginx configuration template at runtime
+CMD /bin/sh -c "envsubst '\${BACKEND_SERVICE_URL} \${BACKEND_SERVICE_HOST}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
