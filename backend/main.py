@@ -19,7 +19,7 @@ from services.code_service import run_code2prompt
 # --- Configuration ---
 TEMP_DIR = "temp"
 RESULTS_DIR = "results"
-CLEANUP_AGE_SECONDS = 10 * 60  # 10 minutes
+CLEANUP_AGE_SECONDS = 5 * 60  # 5 minutes
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # Default for local fallback if needed
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 300  # Keep job data 5 minutes longer than files
@@ -143,21 +143,41 @@ async def cleanup_middleware(request: Request, call_next):
 async def process_upload(temp_dir: str, job_id: str):
     """Handles the actual code processing in the background."""
     result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
+    input_path_for_service = temp_dir # Default to the UUID dir
+
     try:
-        logger.info(f"Starting code analysis for job {job_id} in directory {temp_dir}")
+        # --- Determine effective input directory ---
+        if not os.path.isdir(temp_dir):
+             logger.error(f"Initial upload directory {temp_dir} not found.")
+             raise FileNotFoundError(f"Upload directory {temp_dir} missing.")
+
+        items_in_temp = os.listdir(temp_dir)
+        if len(items_in_temp) == 1:
+            potential_project_dir_path = os.path.join(temp_dir, items_in_temp[0])
+            if os.path.isdir(potential_project_dir_path):
+                input_path_for_service = potential_project_dir_path
+                logger.info(f"Detected single subdirectory '{items_in_temp[0]}', using it as input path for code2prompt.")
+            else:
+                logger.info(f"Single item found in {temp_dir}, but it's not a directory. Using base upload directory.")
+        elif len(items_in_temp) == 0:
+             logger.warning(f"Upload directory {temp_dir} is empty.")
+             raise FileNotFoundError("No files found in upload directory.")
+        else:
+            logger.info(f"Multiple items ({len(items_in_temp)}) found in upload directory root {temp_dir}. Using base directory.")
+
+        logger.info(f"Starting analysis job {job_id} on path: {input_path_for_service}")
         update_job_status(job_id, "processing")
 
-        if not os.path.isdir(temp_dir):
-            raise FileNotFoundError(f"Temporary directory {temp_dir} vanished before processing.")
-
-        logger.info(f"Calling run_code2prompt (at once) for job {job_id}")
-        result_content = await run_code2prompt(temp_dir)
-        logger.info(f"Code analysis finished for job {job_id}. Result length: {len(result_content)}")
+        result_content = await run_code2prompt(input_path_for_service)
+        logger.info(f"Code analysis finished for job {job_id}. Output length: {len(result_content)}")
 
         if result_content.startswith("# Error:") or result_content.startswith("# Warning:"):
             logger.warning(f"Job {job_id}: run_code2prompt reported an issue:\n{result_content[:200]}...")
             if result_content.startswith("# Error:"):
-                update_job_status(job_id, "failed", error=result_content.split('\n', 2)[1])
+                error_lines = result_content.split('\n', 2)
+                error_message = error_lines[0]
+                if len(error_lines) > 2 and error_lines[1].strip() == "": error_message = error_lines[2].strip().split('\n')[0]
+                update_job_status(job_id, "failed", error=error_message)
             else:
                 update_job_status(job_id, "completed", result_file=result_file_path)
         else:
@@ -168,16 +188,14 @@ async def process_upload(temp_dir: str, job_id: str):
             f.write(result_content)
         logger.info(f"Output for job {job_id} saved to {result_file_path}")
 
-    except Exception as e:
-        logger.exception(f"Error processing upload for job {job_id}: {e}")
+    except FileNotFoundError as e:
+        logger.error(f"File/Directory not found error for job {job_id}: {e}")
         update_job_status(job_id, "failed", error=str(e))
-        if os.path.exists(result_file_path):
-            try:
-                os.remove(result_file_path)
-            except OSError:
-                pass
+    except Exception as e:
+        logger.exception(f"Unexpected error processing job {job_id}: {e}")
+        update_job_status(job_id, "failed", error=f"Unexpected processing error: {type(e).__name__}")
     finally:
-        logger.info(f"Cleaning up temporary directory {temp_dir} for job {job_id}")
+        logger.info(f"Cleaning up original upload directory {temp_dir} for job {job_id}")
         try:
             if os.path.isdir(temp_dir):
                 shutil.rmtree(temp_dir, ignore_errors=True)
