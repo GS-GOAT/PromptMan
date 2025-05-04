@@ -19,10 +19,10 @@ from services.code_service import run_code2prompt
 # --- Configuration ---
 TEMP_DIR = "temp"
 RESULTS_DIR = "results"
-CLEANUP_AGE_SECONDS = 24 * 60 * 60  # 24 hours
+CLEANUP_AGE_SECONDS = 10 * 60  # 10 minutes
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # Default for local fallback if needed
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 3600  # Keep job data slightly longer than files
+JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 300  # Keep job data 5 minutes longer than files
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,

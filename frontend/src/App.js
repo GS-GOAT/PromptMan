@@ -239,96 +239,123 @@ function App() {
     }
   };
 
+  const handleRemoveFile = (indexToRemove) => {
+    setFilesToUpload(prevFiles => {
+      const newFiles = [...prevFiles];
+      newFiles.splice(indexToRemove, 1);
+      return newFiles;
+    });
+  };
+
   return (
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">PromptMan</h1>
-        <p className="app-subtitle">Generate LLM prompts from your codebase</p>
+        <p className="app-subtitle">Codebase-to-Prompt Generator</p>
       </header>
 
-      <section className="section-container">
-        <div className="section-content">
-          <h2 className="section-title">Upload Your Code</h2>
-          <p className="section-description">
-            Upload your code folder to generate a comprehensive prompt that describes the codebase.
-          </p>
-
-          {!jobId && (
-            <>
-              <div
-                className={`drop-zone ${isDragging ? 'active' : ''}`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                onClick={handleBrowseClick}
-              >
-                <i className="fas fa-folder-open fa-2x" style={{ marginBottom: '1rem', color: 'var(--primary-color)' }}></i>
-                <p className="drop-zone-text">Drag & drop your code folder here</p>
-                <p style={{color: 'var(--text-muted)'}}>or</p>
-                <button className="btn">
+      {!jobId && !error && (
+        <section className="section-container">
+          <div className="section-content">
+            <h2 className="section-title">
+              <i className="fas fa-upload"></i>
+              Upload Codebase
+            </h2>
+            <p className="section-description">
+              Select your project folder. Common build artifacts and ignored files (node_modules, .git) are skipped automatically.
+            </p>
+            
+            <div
+              className={`drop-zone ${isDragging ? 'active' : ''}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={handleBrowseClick}
+              role="button"
+              tabIndex="0"
+              aria-label="Drop code folder here or click to browse"
+            >
+              <div className="drop-zone-content">
+                <i className="fas fa-folder-open drop-zone-icon"></i>
+                <p className="drop-zone-text">Drag & Drop Folder</p>
+                <p style={{color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0'}}>or</p>
+                <button type="button" className="btn">
                   <i className="fas fa-search"></i> Browse Files
                 </button>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="file-input"
-                  onChange={handleFileSelect}
-                  webkitdirectory="true"
-                  directory="true"
-                  multiple
-                />
               </div>
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="file-input"
+                onChange={handleFileSelect}
+                webkitdirectory="true"
+                directory="true"
+                multiple
+              />
+            </div>
 
-              {totalFilesSelected > 0 && (
-                <>
-                  <div className="files-list">
-                    <p><i className="fas fa-list"></i> Selected {totalFilesSelected} items, uploading {filesToUpload.length} relevant file(s)</p>
-                    {filesToUpload.slice(0, 5).map((file, index) => (
-                      <div key={index} className="files-list-item">
-                        <i className="fas fa-file-code"></i> {file.webkitRelativePath || file.name}
+            {totalFilesSelected > 0 && (
+              <>
+                <div className="files-list">
+                  <p className="files-list-header">
+                    <i className="fas fa-list-ul"></i>
+                    Processing {filesToUpload.length} relevant files (out of {totalFilesSelected} selected)
+                  </p>
+                  {filesToUpload.map((file, index) => (
+                    <div key={file.name + index} className="files-list-item">
+                      <div className="file-item-content">
+                        <i className="fas fa-file-code"></i>
+                        <span className="file-item-text">{file.webkitRelativePath || file.name}</span>
                       </div>
-                    ))}
-                    {filesToUpload.length > 5 && (
-                      <div className="files-list-item">
-                        <i className="fas fa-ellipsis-h"></i> ... and {filesToUpload.length - 5} more relevant files
-                      </div>
+                      <button
+                        className="remove-file-btn"
+                        onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
+                        title="Remove file"
+                        aria-label={`Remove file ${file.name}`}
+                      >
+                        <i className="fas fa-times"></i>
+                      </button>
+                    </div>
+                  ))}
+                  {filesToUpload.length === 0 && (
+                    <div className="files-list-item" style={{color: 'var(--warning-color)', fontStyle: 'italic'}}>
+                      All selected files/folders were ignored.
+                    </div>
+                  )}
+                </div>
+
+                <div style={{marginTop: '1.5rem', textAlign: 'center'}}>
+                  <button
+                    className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
+                    onClick={handleUpload}
+                    disabled={isUploading || filesToUpload.length === 0}
+                  >
+                    {isUploading ? (
+                      <><i className="fas fa-spinner fa-spin"></i> Uploading ({filesToUpload.length})...</>
+                    ) : (
+                      <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
                     )}
-                    {filesToUpload.length === 0 && totalFilesSelected > 0 && (
-                      <div className="files-list-item" style={{color: 'var(--warning-color)'}}>
-                        All selected files were filtered out (e.g., only node_modules, .git).
-                      </div>
-                    )}
-                  </div>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </section>
+      )}
 
-                  <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-                    <button
-                      className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
-                      onClick={handleUpload}
-                      disabled={isUploading || filesToUpload.length === 0}
-                    >
-                      {isUploading ? (
-                        <><i className="fas fa-spinner fa-spin"></i> Uploading {filesToUpload.length} files...</>
-                      ) : (
-                        <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
-                      )}
-                    </button>
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      </section>
-
-      {error && (
+      {error && !jobId && (
         <section className="section-container">
           <div className="section-content">
             <div className="status-card failed">
-              <div className="status-label"><i className="fas fa-exclamation-triangle"></i> Error</div>
+              <div className="status-label">
+                <i className="fas fa-exclamation-triangle"></i> Error
+              </div>
               <div className="status-error">{error}</div>
-              <button className="btn btn-reset" onClick={handleReset} style={{ marginTop: '1rem' }}>
-                <i className="fas fa-sync-alt"></i> Start Over
-              </button>
+              <div class="status-actions">
+                <button className="btn btn-reset" onClick={handleReset}>
+                  <i className="fas fa-sync-alt"></i> Try Again
+                </button>
+              </div>
             </div>
           </div>
         </section>
@@ -337,22 +364,25 @@ function App() {
       {jobId && (
         <section className="section-container">
           <div className="section-content">
-            <h2 className="section-title">Processing Status</h2>
-
-            <div className={`status-card ${jobStatus?.status || 'uploading'}`}>
-              <div className="status-label">Status</div>
+            <h2 className="section-title">
+              <i className="fas fa-tasks"></i> Processing Status
+            </h2>
+            <div className={`status-card ${jobStatus?.status || 'pending'}`}>
+              <div className="status-label">
+                <i className="fas fa-info-circle"></i> Status
+              </div>
               <div className="status-text">
-                {jobStatus?.status === 'pending' && 'Queued'}
-                {jobStatus?.status === 'uploading' && 'Uploading Files'}
-                {jobStatus?.status === 'processing' && 'Processing Code'}
-                {jobStatus?.status === 'completed' && 'Processing Complete'}
-                {jobStatus?.status === 'failed' && 'Processing Failed'}
-                {!jobStatus?.status && 'Initializing...'}
+                {jobStatus?.status === 'pending' && <><i className="fas fa-clock"></i> Queued for Processing...</>}
+                {jobStatus?.status === 'uploading' && <><i className="fas fa-spinner fa-spin"></i> Uploading Files...</>}
+                {jobStatus?.status === 'processing' && <><i className="fas fa-cog fa-spin"></i> Analyzing Codebase...</>}
+                {jobStatus?.status === 'completed' && <><i className="fas fa-check-circle"></i> Processing Complete!</>}
+                {jobStatus?.status === 'failed' && <><i className="fas fa-times-circle"></i> Processing Failed</>}
+                {!jobStatus && <>Initializing...</>}
               </div>
 
-              {(jobStatus?.status === 'uploading' || jobStatus?.status === 'processing') && (
+              {(jobStatus?.status === 'pending' || jobStatus?.status === 'uploading' || jobStatus?.status === 'processing') && (
                 <div className="progress-container">
-                  <div className="progress-bar pulse" style={{ width: '100%' }}></div>
+                  <div className="progress-bar"></div>
                 </div>
               )}
 
@@ -360,17 +390,19 @@ function App() {
                 <div className="status-error">{jobStatus.error}</div>
               )}
 
-              {jobStatus?.status === 'completed' && (
-                <button className="btn btn-download" onClick={handleDownload} style={{ marginTop: '1rem' }}>
-                  Download Result
-                </button>
-              )}
+              <div className="status-actions">
+                {jobStatus?.status === 'completed' && (
+                  <button className="btn btn-download" onClick={handleDownload}>
+                    <i className="fas fa-download"></i> Download Prompt
+                  </button>
+                )}
 
-              {(jobStatus?.status === 'completed' || jobStatus?.status === 'failed') && (
-                <button className="btn btn-reset" onClick={handleReset} style={{ marginTop: '1rem', marginLeft: '0.5rem' }}>
-                  Start New Job
-                </button>
-              )}
+                {(jobStatus?.status === 'completed' || jobStatus?.status === 'failed') && (
+                  <button className="btn btn-reset" onClick={handleReset}>
+                    <i className="fas fa-redo-alt"></i> Start New Job
+                  </button>
+                )}
+              </div>
             </div>
 
             <div className="job-id-display">
