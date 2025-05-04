@@ -26,6 +26,36 @@ const IGNORE_PATTERNS = [
   'results'
 ];
 
+// --- Patterns to match against full paths ---
+const IGNORE_PATH_PATTERNS = new Set([
+  'node_modules',
+  '.git',
+  'build',
+  'dist',
+  'coverage',
+  'venv',
+  'env',
+  '.env',
+  '__pycache__',
+  '.vscode',
+  '.idea',
+  '.next',
+  'results'
+]);
+
+// --- Patterns to match against filenames ---
+const IGNORE_FILE_PATTERNS = new Set([
+  '.DS_Store',
+  'Thumbs.db',
+  'package-lock.json',
+]);
+
+// --- File extensions to ignore ---
+const IGNORE_EXTENSIONS = new Set([
+  '.log',
+  '.csv'
+]);
+
 function App() {
   const [filesToUpload, setFilesToUpload] = useState([]);
   const [totalFilesSelected, setTotalFilesSelected] = useState(0);
@@ -49,18 +79,38 @@ function App() {
       const relativePath = file.webkitRelativePath || file.name;
       if (!relativePath) return false;
 
-      const filename = relativePath.split('/').pop();
-      if (IGNORE_PATTERNS.includes(filename)) {
-        return false;
-      }
-
-      if (filename.endsWith('.log')) {
-        return false;
-      }
-
+      // Split path only once
       const segments = relativePath.split('/');
+      const filename = segments[segments.length - 1];
+
+      // Quick check for dot files
+      if (filename.startsWith('.')) {
+        return false;
+      }
+
+      // Check filename against ignore patterns
+      if (IGNORE_FILE_PATTERNS.has(filename)) {
+        return false;
+      }
+
+      // Check file extension
+      const lastDotIndex = filename.lastIndexOf('.');
+      if (lastDotIndex !== -1) {
+        const extension = filename.slice(lastDotIndex);
+        if (IGNORE_EXTENSIONS.has(extension)) {
+          return false;
+        }
+      }
+
+      // Check directory patterns - only need to check directories
       for (let i = 0; i < segments.length - 1; i++) {
-        if (IGNORE_PATTERNS.includes(segments[i])) {
+        const segment = segments[i];
+        // Early return for dot directories
+        if (segment.startsWith('.')) {
+          return false;
+        }
+        // Check against ignore patterns using Set for O(1) lookup
+        if (IGNORE_PATH_PATTERNS.has(segment)) {
           return false;
         }
       }
