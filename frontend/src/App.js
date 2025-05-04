@@ -20,6 +20,10 @@ const IGNORE_PATTERNS = [
   '.DS_Store',
   'Thumbs.db',
   '.log',
+  '.next',
+  'package-lock.json',
+  '.csv',
+  'results'
 ];
 
 function App() {
