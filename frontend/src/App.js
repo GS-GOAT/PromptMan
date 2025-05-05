@@ -31,6 +31,8 @@ function App() {
   const [isProcessingRepo, setIsProcessingRepo] = useState(false);
   const fileInputRef = useRef(null);
 
+  const [activeInputMode, setActiveInputMode] = useState('upload');
+
   const STATUS_POLL_INTERVAL = 2000;
   const STATUS_POLL_MAX_TIME = 30 * 60 * 1000;
 
@@ -274,6 +276,7 @@ function App() {
     setError(null);
     setIsUploading(false);
     setIsProcessingRepo(false);
+    setActiveInputMode('upload');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -287,158 +290,179 @@ function App() {
       </header>
 
       {!jobId ? (
-        <>
-          <section className="section-container">
-            <div className="section-content">
-              <h2 className="section-title">
-                <i className="fas fa-upload"></i> Upload Codebase Folder
-              </h2>
-              <p className="section-description">
-                Select your project folder. Common artifacts (node_modules, .git) are skipped.
-              </p>
-              <div
-                className={`drop-zone ${isDragging ? 'active' : ''}`}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                onClick={handleBrowseClick}
-                role="button"
-                tabIndex="0"
-                aria-label="Drop code folder here or click to browse"
+        <section className="section-container">
+          <div className="section-content">
+            {/* Tab Header */}
+            <div className="input-mode-tabs">
+              <button
+                className={`tab-button ${activeInputMode === 'upload' ? 'active' : ''}`}
+                onClick={() => setActiveInputMode('upload')}
+                disabled={isFiltering || isUploading || isProcessingRepo}
               >
-                <div className="drop-zone-content">
-                  <i className="fas fa-folder-open drop-zone-icon"></i>
-                  <p className="drop-zone-text">Drag & Drop Folder</p>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0' }}>or</p>
-                  <button type="button" className="btn">
-                    <i className="fas fa-search"></i> Browse Files
-                  </button>
-                </div>
-                <input
-                  type="file"
-                  ref={fileInputRef}
-                  className="file-input"
-                  onChange={handleFileSelect}
-                  webkitdirectory="true"
-                  directory="true"
-                  multiple
-                />
-              </div>
-              {isFiltering && (
-                <div className="filtering-overlay">
-                  <div className="filtering-content">
-                    <div className="filtering-spinner"></div>
-                    <p>Filtering files...</p>
-                  </div>
-                </div>
-              )}
-              {totalFilesSelected > 0 && !isFiltering && (
+                <i className="fas fa-upload"></i> Upload Folder
+              </button>
+              <button
+                className={`tab-button ${activeInputMode === 'repo' ? 'active' : ''}`}
+                onClick={() => setActiveInputMode('repo')}
+                disabled={isFiltering || isUploading || isProcessingRepo}
+              >
+                <i className="fab fa-git-alt"></i> Repository URL
+              </button>
+            </div>
+
+            {/* Tab Content */}
+            <div className="tab-content">
+              {activeInputMode === 'upload' && (
                 <>
-                  <div className="files-list">
-                    <p className="files-list-header">
-                      <i className="fas fa-list-ul"></i> Processing {filesToUpload.length} relevant files (out of {totalFilesSelected} selected)
-                    </p>
-                    {filesToUpload.map((file, index) => (
-                      <div key={file.name + index + file.size} className="files-list-item">
-                        <div className="file-item-content">
-                          <i className="fas fa-file-code"></i>
-                          <span className="file-item-text" title={file.webkitRelativePath || file.name}>
-                            {file.webkitRelativePath || file.name}
-                          </span>
-                        </div>
+                  <h2 className="section-title">
+                    <i className="fas fa-upload"></i> Upload Codebase Folder
+                  </h2>
+                  <p className="section-description">
+                    Select your project folder. Common artifacts (node_modules, .git) are skipped.
+                  </p>
+                  <div
+                    className={`drop-zone ${isDragging ? 'active' : ''}`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    onClick={handleBrowseClick}
+                    role="button"
+                    tabIndex="0"
+                    aria-label="Drop code folder here or click to browse"
+                  >
+                    <div className="drop-zone-content">
+                      <i className="fas fa-folder-open drop-zone-icon"></i>
+                      <p className="drop-zone-text">Drag & Drop Folder</p>
+                      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0' }}>or</p>
+                      <button type="button" className="btn">
+                        <i className="fas fa-search"></i> Browse Files
+                      </button>
+                    </div>
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="file-input"
+                      onChange={handleFileSelect}
+                      webkitdirectory="true"
+                      directory="true"
+                      multiple
+                      disabled={isUploading || isProcessingRepo}
+                    />
+                  </div>
+                  {isFiltering && (
+                    <div className="filtering-overlay">
+                      <div className="filtering-content">
+                        <div className="filtering-spinner"></div>
+                        <p>Filtering files...</p>
+                      </div>
+                    </div>
+                  )}
+                  {totalFilesSelected > 0 && !isFiltering && (
+                    <>
+                      <div className="files-list">
+                        <p className="files-list-header">
+                          <i className="fas fa-list-ul"></i> Processing {filesToUpload.length} relevant files (out of {totalFilesSelected} selected)
+                        </p>
+                        {filesToUpload.map((file, index) => (
+                          <div key={file.name + index + file.size} className="files-list-item">
+                            <div className="file-item-content">
+                              <i className="fas fa-file-code"></i>
+                              <span className="file-item-text" title={file.webkitRelativePath || file.name}>
+                                {file.webkitRelativePath || file.name}
+                              </span>
+                            </div>
+                            <button
+                              className="remove-file-btn"
+                              onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
+                              title="Remove file"
+                              aria-label={`Remove file ${file.name}`}
+                              disabled={isUploading}
+                            >
+                              <i className="fas fa-times"></i>
+                            </button>
+                          </div>
+                        ))}
+                        {filesToUpload.length === 0 && (
+                          <div className="files-list-item" style={{ color: 'var(--warning-color)', fontStyle: 'italic' }}>
+                            All selected files/folders were ignored.
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
                         <button
-                          className="remove-file-btn"
-                          onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
-                          title="Remove file"
-                          aria-label={`Remove file ${file.name}`}
+                          className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
+                          onClick={handleUpload}
+                          disabled={isUploading || filesToUpload.length === 0 || isProcessingRepo}
                         >
-                          <i className="fas fa-times"></i>
+                          {isUploading ? (
+                            <><i className="fas fa-spinner fa-spin"></i> Uploading...</>
+                          ) : (
+                            <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
+                          )}
                         </button>
                       </div>
-                    ))}
-                    {filesToUpload.length === 0 && (
-                      <div className="files-list-item" style={{ color: 'var(--warning-color)', fontStyle: 'italic' }}>
-                        All selected files/folders were ignored.
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+                    </>
+                  )}
+                </>
+              )}
+
+              {activeInputMode === 'repo' && (
+                <>
+                  <h2 className="section-title">
+                    <i className="fab fa-git-alt"></i> Process Public Repository
+                  </h2>
+                  <p className="section-description">
+                    Enter the URL of a public Git repository (e.g., GitHub, GitLab).
+                  </p>
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                    <input
+                      type="url"
+                      value={repoUrl}
+                      onChange={handleRepoUrlChange}
+                      placeholder="https://github.com/owner/repo.git"
+                      aria-label="Repository URL"
+                      disabled={isProcessingRepo || isUploading}
+                      style={{
+                        flexGrow: 1,
+                        padding: '0.6rem 0.8rem',
+                        borderRadius: '6px',
+                        border: '1px solid var(--card-border-color)',
+                        background: 'rgba(var(--card-bg-rgb), 0.8)',
+                        color: 'var(--text-color)',
+                        fontSize: '0.9rem'
+                      }}
+                    />
                     <button
-                      className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
-                      onClick={handleUpload}
-                      disabled={isUploading || filesToUpload.length === 0}
+                      className={`btn ${(isProcessingRepo || !repoUrl.trim()) ? 'btn-disabled' : ''}`}
+                      onClick={handleProcessRepo}
+                      disabled={isProcessingRepo || isUploading || !repoUrl.trim()}
                     >
-                      {isUploading ? (
-                        <><i className="fas fa-spinner fa-spin"></i> Uploading...</>
+                      {isProcessingRepo ? (
+                        <><i className="fas fa-spinner fa-spin"></i> Starting...</>
                       ) : (
-                        <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
+                        <><i className="fas fa-cogs"></i> Process URL</>
                       )}
                     </button>
                   </div>
                 </>
               )}
             </div>
-          </section>
 
-          <section className="section-container">
-            <div className="section-content">
-              <h2 className="section-title">
-                <i className="fab fa-git-alt"></i> Process Public Repository
-              </h2>
-              <p className="section-description">
-                Enter the URL of a public Git repository (e.g., GitHub, GitLab).
-              </p>
-              <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                <input
-                  type="url"
-                  value={repoUrl}
-                  onChange={handleRepoUrlChange}
-                  placeholder="https://github.com/owner/repo.git"
-                  aria-label="Repository URL"
-                  disabled={isProcessingRepo}
-                  style={{
-                    flexGrow: 1,
-                    padding: '0.6rem 0.8rem',
-                    borderRadius: '6px',
-                    border: '1px solid var(--card-border-color)',
-                    background: 'rgba(var(--card-bg-rgb), 0.8)',
-                    color: 'var(--text-color)',
-                    fontSize: '0.9rem'
-                  }}
-                />
-                <button
-                  className={`btn ${isProcessingRepo ? 'btn-disabled' : ''}`}
-                  onClick={handleProcessRepo}
-                  disabled={isProcessingRepo}
-                >
-                  {isProcessingRepo ? (
-                    <><i className="fas fa-spinner fa-spin"></i> Starting...</>
-                  ) : (
-                    <><i className="fas fa-cogs"></i> Process URL</>
-                  )}
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {error && (
-            <section className="section-container">
-              <div className="section-content">
-                <div className="status-card failed">
-                  <div className="status-label">
-                    <i className="fas fa-exclamation-triangle"></i> Error
-                  </div>
-                  <div className="status-error">{error}</div>
-                  <div className="status-actions">
-                    <button className="btn" onClick={handleReset}>
-                      <i className="fas fa-sync-alt"></i> Clear
-                    </button>
-                  </div>
+            {error && (
+              <div className="status-card failed" style={{ marginTop: '2rem' }}>
+                <div className="status-label">
+                  <i className="fas fa-exclamation-triangle"></i> Error
+                </div>
+                <div className="status-error">{error}</div>
+                <div className="status-actions">
+                  <button className="btn" onClick={handleReset}>
+                    <i className="fas fa-sync-alt"></i> Clear Error
+                  </button>
                 </div>
               </div>
-            </section>
-          )}
-        </>
+            )}
+          </div>
+        </section>
       ) : (
         <section className="section-container">
           <div className="section-content">

@@ -484,6 +484,90 @@ body::before {
   font-family: monospace;
 }
 
+/* --- Tab Styles --- */
+.input-mode-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--card-border-color);
+  margin-bottom: 2rem;
+  margin-left: -2.5rem;
+  margin-right: -2.5rem;
+  padding: 0 2.5rem;
+}
+
+.tab-button {
+  font-family: var(--font-secondary);
+  font-weight: 700;
+  font-size: 0.9rem;
+  padding: 0.8rem 1.5rem;
+  cursor: pointer;
+  background-color: transparent;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: var(--text-muted);
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: -1px;
+  outline: none;
+}
+
+.tab-button:hover:not(:disabled) {
+  color: var(--text-color);
+}
+
+.tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+}
+
+.tab-button:disabled {
+  color: var(--text-muted);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.tab-content {
+  padding-top: 0.5rem;
+}
+
+.tab-content .section-title {
+  margin-top: 0;
+}
+
+/* Ensure proper filtering overlay positioning */
+.section-content {
+  position: relative;
+}
+
+.filtering-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  border-radius: 0 0 10px 10px;
+  background: rgba(var(--card-bg-rgb), 0.9);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+/* Responsive adjustments for tabs */
+@media (max-width: 768px) {
+  .input-mode-tabs {
+    margin-left: -1.5rem;
+    margin-right: -1.5rem;
+    padding: 0 1.5rem;
+  }
+  
+  .tab-button {
+    padding: 0.7rem 1rem;
+    font-size: 0.85rem;
+  }
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
   .app-container { padding: 1.5rem 1rem; }
