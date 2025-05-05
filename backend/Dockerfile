@@ -18,6 +18,9 @@ ENV REDIS_HOST redis
 ENV REDIS_PORT 6379
 ENV ALLOWED_ORIGINS="http://localhost:3000,http://127.0.0.1:3000"
 
+# Install git
+RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
+
 # Copy the compiled code2prompt binary from the builder stage
 COPY --from=builder /usr/local/cargo/bin/code2prompt /usr/local/bin/code2prompt
 
@@ -37,8 +40,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY . /app
 
 # Create directories and set permissions
-RUN mkdir -p /app/temp /app/results && \
-    chown -R app:app /app/temp /app/results
+RUN mkdir -p /app/temp /app/results /app/temp_clones && \
+    chown -R app:app /app/temp /app/results /app/temp_clones
 
 # Change to non-root user
 USER app

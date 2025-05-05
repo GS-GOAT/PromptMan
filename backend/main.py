@@ -3,51 +3,54 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Backgroun
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 import os
 import shutil
 import time
 from typing import List
 import uuid
 import asyncio
+import subprocess
 import logging
 import redis
 import json
+import re
 
-# Import the revised code service
+# Import the code service
 from services.code_service import run_code2prompt
 
 # --- Configuration ---
 TEMP_DIR = "temp"
 RESULTS_DIR = "results"
-CLEANUP_AGE_SECONDS = 5 * 60  # 5 minutes
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")  # Default for local fallback if needed
+TEMP_CLONES_DIR = "temp_clones"
+CLEANUP_AGE_SECONDS = 10 * 60  # 10 minutes
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
-JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 300  # Keep job data 5 minutes longer than files
+JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 300
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+                   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- FastAPI App Initialization ---
-app = FastAPI(title="PromptMan Direct API")
+# --- FastAPI App Setup ---
+app = FastAPI(title="PromptMan API")
 
 # --- Redis Connection ---
-redis_client = None  # Initialize as None
+redis_client = None
 try:
-    # Connect using Host and Port
     redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
-    redis_client.ping()  # Verify connection
+    redis_client.ping()
     logger.info(f"Successfully connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
 except redis.exceptions.ConnectionError as e:
     logger.error(f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT} - {e}")
-    redis_client = None  # Ensure it's None on failure
-except Exception as e:  # Catch other potential errors
+    redis_client = None
+except Exception as e:
     logger.error(f"Failed to initialize Redis client - {e}")
     redis_client = None
 
-# --- CORS Middleware ---
-allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000")
+# --- CORS Setup ---
+allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(',') if origin.strip()]
 
 app.add_middleware(
@@ -61,9 +64,10 @@ app.add_middleware(
 # --- Directory Creation ---
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
+os.makedirs(TEMP_CLONES_DIR, exist_ok=True)
 
+# --- Job Management Functions ---
 def create_job():
-    """Creates a new job entry in Redis and returns its ID."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Job storage unavailable (Redis connection failed)")
     job_id = str(uuid.uuid4())
@@ -79,14 +83,14 @@ def create_job():
     return job_id
 
 def update_job_status(job_id, status, error=None, result_file=None):
-    """Updates the status and other details of a job in Redis."""
     if not redis_client:
+        logger.error(f"Cannot update job {job_id}: Redis client unavailable.")
         return
     job_key = f"job:{job_id}"
     try:
         job_data_str = redis_client.get(job_key)
         if not job_data_str:
-            logger.warning(f"Attempted to update status for non-existent job in Redis: {job_id}")
+            logger.warning(f"Attempted to update status for non-existent/expired job in Redis: {job_id}")
             return
 
         job_data = json.loads(job_data_str)
@@ -95,25 +99,31 @@ def update_job_status(job_id, status, error=None, result_file=None):
         job_data["error"] = str(error) if error else None
         job_data["result_file"] = result_file
 
-        redis_client.set(job_key, json.dumps(job_data), ex=JOB_EXPIRY_SECONDS)
+        ttl = redis_client.ttl(job_key)
+        expiry = ttl if ttl > 0 else JOB_EXPIRY_SECONDS
+        redis_client.set(job_key, json.dumps(job_data), ex=expiry)
+        
         logger.info(f"Job {job_id} status updated to {status} in Redis")
         if error:
             logger.error(f"Job {job_id} failed with error: {error}")
     except Exception as e:
-        logger.error(f"Failed to update job {job_id} status in Redis: {e}")
+        logger.exception(f"Error updating job {job_id} status: {e}")
 
 def get_job_status(job_id):
-    """Retrieves the status of a job from Redis."""
     if not redis_client:
+        logger.error("Cannot get job status: Redis client unavailable.")
         return None
     job_data_str = redis_client.get(f"job:{job_id}")
     if job_data_str:
-        return json.loads(job_data_str)
+        try:
+            return json.loads(job_data_str)
+        except json.JSONDecodeError:
+            logger.error(f"Invalid JSON found in Redis for job {job_id}")
+            return None
     return None
 
 # --- Cleanup Logic ---
 def cleanup_old_files(directory: str, max_age_seconds: int):
-    """Removes files/dirs older than max_age_seconds in a given directory."""
     if not os.path.isdir(directory):
         return
     current_time = time.time()
@@ -126,81 +136,188 @@ def cleanup_old_files(directory: str, max_age_seconds: int):
                     os.remove(item_path)
                     logger.info(f"Cleaned up old file: {item_path}")
                 elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
-                    logger.info(f"Cleaned up old directory: {item_path}")
+                    if item_path != directory:
+                        shutil.rmtree(item_path, ignore_errors=True)
+                        logger.info(f"Cleaned up old directory: {item_path}")
         except Exception as e:
             logger.warning(f"Error during cleanup of {item_path}: {e}")
 
-# --- Middleware for Cleanup ---
 @app.middleware("http")
 async def cleanup_middleware(request: Request, call_next):
     cleanup_old_files(TEMP_DIR, CLEANUP_AGE_SECONDS)
     cleanup_old_files(RESULTS_DIR, CLEANUP_AGE_SECONDS)
+    cleanup_old_files(TEMP_CLONES_DIR, CLEANUP_AGE_SECONDS)
     response = await call_next(request)
     return response
 
-# --- Background Task for Processing Uploads ---
-async def process_upload(temp_dir: str, job_id: str):
-    """Handles the actual code processing in the background."""
+# --- Repository Processing ---
+class RepoRequest(BaseModel):
+    repo_url: str
+
+async def process_repository_job(job_id: str, repo_url: str):
+    """Clones a repository (creating repo-named subdir) and handles code processing."""
+    # Define the base directory for this job's clone operation
+    job_clone_base_dir = os.path.join(TEMP_CLONES_DIR, job_id)
     result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
-    input_path_for_service = temp_dir # Default to the UUID dir
+    # We expect the actual code path to be detected later
+    input_path_for_service = None # Will be determined after clone
 
     try:
-        # --- Determine effective input directory ---
+        # Create the unique base directory for this job
+        os.makedirs(job_clone_base_dir, exist_ok=True)
+        logger.info(f"[Repo Job {job_id}] Starting cloning: {repo_url} into base dir {job_clone_base_dir}")
+        update_job_status(job_id, "cloning")
+
+        # Let git create the repo-named subdirectory
+        cmd = ['git', 'clone', '--depth', '1', repo_url]
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=job_clone_base_dir # Run git in the base directory
+        )
+
+        try:
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
+        except asyncio.TimeoutError:
+            logger.error(f"[Repo Job {job_id}] Git clone timed out after 300 seconds.")
+            update_job_status(job_id, "failed", error="Repository cloning timed out")
+            try: process.kill()
+            except ProcessLookupError: pass
+            return
+
+        if process.returncode != 0:
+            error_output = stderr.decode().strip() if stderr else "Unknown clone error"
+            logger.error(f"[Repo Job {job_id}] Git clone failed: {error_output}")
+            update_job_status(job_id, "failed", error=f"Failed to clone repository: {error_output[:200]}")
+            return
+
+        logger.info(f"[Repo Job {job_id}] Cloning successful.")
+
+        # Determine effective input directory
+        items_in_base_dir = os.listdir(job_clone_base_dir)
+        if len(items_in_base_dir) == 1:
+            # Expecting exactly one item: the directory named after the repo
+            repo_subdir_name = items_in_base_dir[0]
+            potential_project_dir = os.path.join(job_clone_base_dir, repo_subdir_name)
+            if os.path.isdir(potential_project_dir):
+                input_path_for_service = potential_project_dir
+                logger.info(f"[Repo Job {job_id}] Detected repository subdirectory '{repo_subdir_name}', using it.")
+            else:
+                logger.error(f"[Repo Job {job_id}] Cloned successfully, but single item '{repo_subdir_name}' is not a directory?")
+                raise FileNotFoundError("Cloned item is not a directory.")
+        elif len(items_in_base_dir) == 0:
+            logger.error(f"[Repo Job {job_id}] Clone directory {job_clone_base_dir} is empty after successful clone command?")
+            raise FileNotFoundError("Cloned directory appears empty.")
+        else:
+            # Handle unusual cases with multiple items
+            logger.warning(f"[Repo Job {job_id}] Multiple items found in clone base directory ({items_in_base_dir}). Attempting to find repo root or using base.")
+            # Attempt heuristic: find the dir containing .git
+            found_repo_dir = None
+            for item in items_in_base_dir:
+                potential_dir = os.path.join(job_clone_base_dir, item)
+                if os.path.isdir(potential_dir) and os.path.exists(os.path.join(potential_dir, '.git')):
+                    found_repo_dir = potential_dir
+                    logger.info(f"[Repo Job {job_id}] Found likely repo dir: '{item}'")
+                    break
+            if found_repo_dir:
+                input_path_for_service = found_repo_dir
+            else:
+                logger.warning(f"[Repo Job {job_id}] Could not definitively identify repo root among multiple items. Using base directory {job_clone_base_dir} - This might be incorrect!")
+                input_path_for_service = job_clone_base_dir
+
+        # Proceed with processing
+        update_job_status(job_id, "processing")
+        logger.info(f"[Repo Job {job_id}] Starting analysis on path: {input_path_for_service}")
+        result_content = await run_code2prompt(input_path_for_service)
+        logger.info(f"[Repo Job {job_id}] Analysis finished. Output length: {len(result_content)}")
+
+        if result_content.startswith(("# Error:", "# Warning:")):
+            first_line = result_content.split('\n', 1)[0]
+            logger.warning(f"[Repo Job {job_id}] code2prompt reported: {first_line}")
+            if result_content.startswith("# Error:"):
+                update_job_status(job_id, "failed", error=f"Code analysis failed: {first_line}")
+                return
+
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        with open(result_file_path, "w", encoding="utf-8") as f:
+            f.write(result_content)
+        logger.info(f"[Repo Job {job_id}] Output saved to {result_file_path}")
+        update_job_status(job_id, "completed", result_file=result_file_path)
+
+    except FileNotFoundError as e:
+        logger.error(f"[Repo Job {job_id}] File/Directory error during processing: {e}")
+        update_job_status(job_id, "failed", error=str(e))
+    except Exception as e:
+        logger.exception(f"[Repo Job {job_id}] Unexpected error during repo processing: {e}")
+        update_job_status(job_id, "failed", error=f"Unexpected error: {type(e).__name__}")
+    finally:
+        # Cleanup uses the base directory for the job
+        logger.info(f"[Repo Job {job_id}] Cleaning up base clone directory {job_clone_base_dir}")
+        shutil.rmtree(job_clone_base_dir, ignore_errors=True)
+
+# --- File Upload Background Task ---
+async def process_upload(temp_dir: str, job_id: str):
+    """Handles code processing for direct file uploads."""
+    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
+    input_path_for_service = temp_dir
+
+    try:
         if not os.path.isdir(temp_dir):
-             logger.error(f"Initial upload directory {temp_dir} not found.")
-             raise FileNotFoundError(f"Upload directory {temp_dir} missing.")
+            logger.error(f"[Upload Job {job_id}] Initial upload directory {temp_dir} not found.")
+            raise FileNotFoundError(f"Upload directory {temp_dir} missing.")
 
         items_in_temp = os.listdir(temp_dir)
         if len(items_in_temp) == 1:
             potential_project_dir_path = os.path.join(temp_dir, items_in_temp[0])
             if os.path.isdir(potential_project_dir_path):
                 input_path_for_service = potential_project_dir_path
-                logger.info(f"Detected single subdirectory '{items_in_temp[0]}', using it as input path for code2prompt.")
-            else:
-                logger.info(f"Single item found in {temp_dir}, but it's not a directory. Using base upload directory.")
+                logger.info(f"[Upload Job {job_id}] Using upload subdirectory: {items_in_temp[0]}")
         elif len(items_in_temp) == 0:
-             logger.warning(f"Upload directory {temp_dir} is empty.")
-             raise FileNotFoundError("No files found in upload directory.")
-        else:
-            logger.info(f"Multiple items ({len(items_in_temp)}) found in upload directory root {temp_dir}. Using base directory.")
+            logger.warning(f"[Upload Job {job_id}] Upload directory {temp_dir} is empty.")
+            raise FileNotFoundError("No files found in upload directory.")
 
-        logger.info(f"Starting analysis job {job_id} on path: {input_path_for_service}")
         update_job_status(job_id, "processing")
-
         result_content = await run_code2prompt(input_path_for_service)
-        logger.info(f"Code analysis finished for job {job_id}. Output length: {len(result_content)}")
 
-        if result_content.startswith("# Error:") or result_content.startswith("# Warning:"):
-            logger.warning(f"Job {job_id}: run_code2prompt reported an issue:\n{result_content[:200]}...")
+        if result_content.startswith(("# Error:", "# Warning:")):
+            first_line = result_content.split('\n', 1)[0]
+            logger.warning(f"[Upload Job {job_id}] code2prompt reported: {first_line}")
             if result_content.startswith("# Error:"):
-                error_lines = result_content.split('\n', 2)
-                error_message = error_lines[0]
-                if len(error_lines) > 2 and error_lines[1].strip() == "": error_message = error_lines[2].strip().split('\n')[0]
-                update_job_status(job_id, "failed", error=error_message)
-            else:
-                update_job_status(job_id, "completed", result_file=result_file_path)
-        else:
-            update_job_status(job_id, "completed", result_file=result_file_path)
+                update_job_status(job_id, "failed", error=f"Code analysis failed: {first_line}")
+                return
+            # Continue with warnings
 
         os.makedirs(RESULTS_DIR, exist_ok=True)
         with open(result_file_path, "w", encoding="utf-8") as f:
             f.write(result_content)
-        logger.info(f"Output for job {job_id} saved to {result_file_path}")
+        logger.info(f"[Upload Job {job_id}] Output saved to {result_file_path}")
+        update_job_status(job_id, "completed", result_file=result_file_path)
 
     except FileNotFoundError as e:
-        logger.error(f"File/Directory not found error for job {job_id}: {e}")
+        logger.error(f"[Upload Job {job_id}] File/Directory error: {e}")
         update_job_status(job_id, "failed", error=str(e))
     except Exception as e:
-        logger.exception(f"Unexpected error processing job {job_id}: {e}")
-        update_job_status(job_id, "failed", error=f"Unexpected processing error: {type(e).__name__}")
+        logger.exception(f"[Upload Job {job_id}] Unexpected error: {e}")
+        update_job_status(job_id, "failed", error=f"Unexpected error: {type(e).__name__}")
     finally:
-        logger.info(f"Cleaning up original upload directory {temp_dir} for job {job_id}")
-        try:
-            if os.path.isdir(temp_dir):
-                shutil.rmtree(temp_dir, ignore_errors=True)
-        except Exception as cleanup_error:
-            logger.warning(f"Error during final cleanup of {temp_dir}: {str(cleanup_error)}")
+        logger.info(f"[Upload Job {job_id}] Cleaning up upload directory {temp_dir}")
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+# --- API Endpoints ---
+@app.post("/api/process-repo")
+async def process_repo(repo_request: RepoRequest, background_tasks: BackgroundTasks):
+    """Accepts a Git repository URL and starts background processing."""
+    repo_url = repo_request.repo_url.strip()
+
+    if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', repo_url):
+        raise HTTPException(status_code=400, detail="Invalid repository URL format.")
+
+    job_id = create_job()
+    background_tasks.add_task(process_repository_job, job_id, repo_url)
+    logger.info(f"Job {job_id}: Background repository processing scheduled for {repo_url}")
+
+    return {"job_id": job_id}
 
 @app.post("/api/upload-codebase")
 async def upload_codebase(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
@@ -229,18 +346,15 @@ async def upload_codebase(background_tasks: BackgroundTasks, files: List[UploadF
             full_path = os.path.join(upload_dir, clean_relative_path)
             os.makedirs(os.path.dirname(full_path), exist_ok=True)
 
-            file_size = 0
             try:
                 with open(full_path, "wb") as f:
                     while content := await file.read(1024 * 1024):
                         f.write(content)
-                        file_size += len(content)
+                        total_size += len(content)
                 file_count += 1
-                total_size += file_size
             except Exception as write_error:
                 logger.error(f"Job {job_id}: Failed to write file {relative_path}: {write_error}")
-
-        logger.info(f"Job {job_id}: Upload complete. Received {file_count} files, total size {total_size} bytes.")
+                continue
 
         if file_count == 0:
             logger.warning(f"Job {job_id}: No valid files were uploaded.")
@@ -248,50 +362,49 @@ async def upload_codebase(background_tasks: BackgroundTasks, files: List[UploadF
             shutil.rmtree(upload_dir, ignore_errors=True)
             return {"job_id": job_id}
 
+        logger.info(f"Job {job_id}: Received {file_count} files, total size {total_size} bytes.")
         background_tasks.add_task(process_upload, upload_dir, job_id)
-        logger.info(f"Job {job_id}: Background processing task scheduled.")
-
         return {"job_id": job_id}
 
     except Exception as e:
         logger.exception(f"Critical error during file upload for job {job_id}: {e}")
-        update_job_status(job_id, "failed", error=f"Upload failed: {e}")
+        update_job_status(job_id, "failed", error=f"Critical upload error: {type(e).__name__}")
         if os.path.isdir(upload_dir):
             shutil.rmtree(upload_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail=f"File upload failed: {e}")
+        raise HTTPException(status_code=500, detail="File upload failed critically.") from e
 
 @app.get("/api/job-status/{job_id}")
 async def job_status(job_id: str):
     """Returns the current status of a background job."""
     status_info = get_job_status(job_id)
     if status_info is None:
-        logger.warning(f"Status requested for unknown job: {job_id}")
-        raise HTTPException(status_code=404, detail="Job not found")
+        raise HTTPException(status_code=404, detail="Job not found or expired")
     return {
         "job_id": job_id,
-        "status": status_info["status"],
-        "created_at": status_info["created_at"],
-        "updated_at": status_info["updated_at"],
-        "error": status_info["error"]
+        "status": status_info.get("status", "unknown"),
+        "error": status_info.get("error")
     }
 
 @app.get("/api/download/{job_id}")
 async def download_file(job_id: str):
     """Allows downloading the result file for a completed job."""
     status_info = get_job_status(job_id)
-    if status_info is None or status_info["status"] != "completed" or not status_info.get("result_file"):
-        logger.warning(f"Download requested for incomplete or non-existent job result: {job_id}")
-        raise HTTPException(status_code=404, detail="Result not found or job not completed")
+    if not status_info:
+        raise HTTPException(status_code=404, detail="Job not found or expired")
 
-    file_path = status_info["result_file"]
+    if status_info.get("status") != "completed":
+        raise HTTPException(status_code=404, detail=f"Job not completed. Current status: {status_info.get('status')}")
+
+    file_path = status_info.get("result_file")
+    if not file_path:
+        raise HTTPException(status_code=500, detail="Result file path missing.")
+
     if not os.path.exists(file_path):
-        logger.error(f"Result file path recorded but file missing for job {job_id}: {file_path}")
-        raise HTTPException(status_code=404, detail="Result file not found")
+        raise HTTPException(status_code=404, detail="Result file not found (may have been cleaned up).")
 
-    logger.info(f"Serving download for job {job_id} from {file_path}")
     return FileResponse(file_path, filename=f"promptman_result_{job_id}.md", media_type='text/markdown')
 
 @app.get("/")
 async def root():
-    """Simple health check or API root message"""
+    """Simple health check endpoint"""
     return {"message": "PromptMan Backend is running."}
