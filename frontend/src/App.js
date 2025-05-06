@@ -33,6 +33,9 @@ function App() {
 
   const [activeInputMode, setActiveInputMode] = useState('upload');
 
+  const [websiteUrl, setWebsiteUrl] = useState('');
+  const [isProcessingWebsite, setIsProcessingWebsite] = useState(false);
+
   const STATUS_POLL_INTERVAL = 2000;
   const STATUS_POLL_MAX_TIME = 30 * 60 * 1000;
 
@@ -261,6 +264,54 @@ function App() {
     }
   }, [repoUrl]);
 
+  const handleWebsiteUrlChange = useCallback((event) => {
+    setWebsiteUrl(event.target.value);
+  }, []);
+
+  const handleProcessWebsite = useCallback(async () => {
+    if (!websiteUrl.trim()) {
+      setError('Please enter a website URL.');
+      return;
+    }
+
+    if (!websiteUrl.startsWith('http://') && !websiteUrl.startsWith('https://')) {
+      setError('Please enter a valid HTTP/HTTPS website URL.');
+      return;
+    }
+
+    setIsProcessingWebsite(true);
+    setError(null);
+    setJobId(null);
+    setJobStatus(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/process-website`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ website_url: websiteUrl })
+      });
+
+      if (!response.ok) {
+        let errorDetail = `Failed to start processing (${response.status})`;
+        try {
+          const errorData = await response.json();
+          if (errorData.detail) errorDetail = errorData.detail;
+        } catch (e) { /* ignore */ }
+        throw new Error(errorDetail);
+      }
+
+      const data = await response.json();
+      setWebsiteUrl('');
+      setJobId(data.job_id);
+    } catch (err) {
+      console.error('Error processing website URL:', err);
+      setError(err.message);
+      setJobId(null);
+    } finally {
+      setIsProcessingWebsite(false);
+    }
+  }, [websiteUrl]);
+
   // --- Result Handling ---
   const handleDownload = useCallback(() => {
     if (!jobId || !jobStatus || jobStatus.status !== 'completed') return;
@@ -271,22 +322,26 @@ function App() {
     setFilesToUpload([]);
     setTotalFilesSelected(0);
     setRepoUrl('');
+    setWebsiteUrl('');
     setJobId(null);
     setJobStatus(null);
     setError(null);
     setIsUploading(false);
     setIsProcessingRepo(false);
+    setIsProcessingWebsite(false);
     setActiveInputMode('upload');
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
   }, []);
 
+  const isProcessing = isUploading || isProcessingRepo || isProcessingWebsite || isFiltering;
+
   return (
     <div className="app-container">
       <header className="app-header">
         <h1 className="app-title">PromptMan</h1>
-        <p className="app-subtitle">Codebase-to-Prompt Generator</p>
+        <p className="app-subtitle">Codebase & Website to Prompt Generator</p>
       </header>
 
       {!jobId ? (
@@ -297,156 +352,202 @@ function App() {
               <button
                 className={`tab-button ${activeInputMode === 'upload' ? 'active' : ''}`}
                 onClick={() => setActiveInputMode('upload')}
-                disabled={isFiltering || isUploading || isProcessingRepo}
+                disabled={isProcessing}
               >
                 <i className="fas fa-upload"></i> Upload Folder
               </button>
               <button
                 className={`tab-button ${activeInputMode === 'repo' ? 'active' : ''}`}
                 onClick={() => setActiveInputMode('repo')}
-                disabled={isFiltering || isUploading || isProcessingRepo}
+                disabled={isProcessing}
               >
                 <i className="fab fa-git-alt"></i> Repository URL
+              </button>
+              <button
+                className={`tab-button ${activeInputMode === 'website' ? 'active' : ''}`}
+                onClick={() => setActiveInputMode('website')}
+                disabled={isProcessing}
+              >
+                <i className="fas fa-globe"></i> Website URL
               </button>
             </div>
 
             {/* Tab Content */}
-            <div className="tab-content">
-              {activeInputMode === 'upload' && (
-                <>
-                  <h2 className="section-title">
-                    <i className="fas fa-upload"></i> Upload Codebase Folder
-                  </h2>
-                  <p className="section-description">
-                    Select your project folder. Common artifacts (node_modules, .git) are skipped.
-                  </p>
-                  <div
-                    className={`drop-zone ${isDragging ? 'active' : ''}`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    onClick={handleBrowseClick}
-                    role="button"
-                    tabIndex="0"
-                    aria-label="Drop code folder here or click to browse"
-                  >
-                    <div className="drop-zone-content">
-                      <i className="fas fa-folder-open drop-zone-icon"></i>
-                      <p className="drop-zone-text">Drag & Drop Folder</p>
-                      <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0' }}>or</p>
-                      <button type="button" className="btn">
-                        <i className="fas fa-search"></i> Browse Files
-                      </button>
-                    </div>
-                    <input
-                      type="file"
-                      ref={fileInputRef}
-                      className="file-input"
-                      onChange={handleFileSelect}
-                      webkitdirectory="true"
-                      directory="true"
-                      multiple
-                      disabled={isUploading || isProcessingRepo}
-                    />
-                  </div>
-                  {isFiltering && (
-                    <div className="filtering-overlay">
-                      <div className="filtering-content">
-                        <div className="filtering-spinner"></div>
-                        <p>Filtering files...</p>
-                      </div>
-                    </div>
-                  )}
-                  {totalFilesSelected > 0 && !isFiltering && (
-                    <>
-                      <div className="files-list">
-                        <p className="files-list-header">
-                          <i className="fas fa-list-ul"></i> Processing {filesToUpload.length} relevant files (out of {totalFilesSelected} selected)
-                        </p>
-                        {filesToUpload.map((file, index) => (
-                          <div key={file.name + index + file.size} className="files-list-item">
-                            <div className="file-item-content">
-                              <i className="fas fa-file-code"></i>
-                              <span className="file-item-text" title={file.webkitRelativePath || file.name}>
-                                {file.webkitRelativePath || file.name}
-                              </span>
-                            </div>
-                            <button
-                              className="remove-file-btn"
-                              onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
-                              title="Remove file"
-                              aria-label={`Remove file ${file.name}`}
-                              disabled={isUploading}
-                            >
-                              <i className="fas fa-times"></i>
-                            </button>
-                          </div>
-                        ))}
-                        {filesToUpload.length === 0 && (
-                          <div className="files-list-item" style={{ color: 'var(--warning-color)', fontStyle: 'italic' }}>
-                            All selected files/folders were ignored.
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-                        <button
-                          className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
-                          onClick={handleUpload}
-                          disabled={isUploading || filesToUpload.length === 0 || isProcessingRepo}
-                        >
-                          {isUploading ? (
-                            <><i className="fas fa-spinner fa-spin"></i> Uploading...</>
-                          ) : (
-                            <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
-                          )}
-                        </button>
-                      </div>
-                    </>
-                  )}
-                </>
-              )}
-
-              {activeInputMode === 'repo' && (
-                <>
-                  <h2 className="section-title">
-                    <i className="fab fa-git-alt"></i> Process Public Repository
-                  </h2>
-                  <p className="section-description">
-                    Enter the URL of a public Git repository (e.g., GitHub, GitLab).
-                  </p>
-                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-                    <input
-                      type="url"
-                      value={repoUrl}
-                      onChange={handleRepoUrlChange}
-                      placeholder="https://github.com/owner/repo.git"
-                      aria-label="Repository URL"
-                      disabled={isProcessingRepo || isUploading}
-                      style={{
-                        flexGrow: 1,
-                        padding: '0.6rem 0.8rem',
-                        borderRadius: '6px',
-                        border: '1px solid var(--card-border-color)',
-                        background: 'rgba(var(--card-bg-rgb), 0.8)',
-                        color: 'var(--text-color)',
-                        fontSize: '0.9rem'
-                      }}
-                    />
-                    <button
-                      className={`btn ${(isProcessingRepo || !repoUrl.trim()) ? 'btn-disabled' : ''}`}
-                      onClick={handleProcessRepo}
-                      disabled={isProcessingRepo || isUploading || !repoUrl.trim()}
-                    >
-                      {isProcessingRepo ? (
-                        <><i className="fas fa-spinner fa-spin"></i> Starting...</>
-                      ) : (
-                        <><i className="fas fa-cogs"></i> Process URL</>
-                      )}
+            {activeInputMode === 'upload' && (
+              <>
+                <h2 className="section-title">
+                  <i className="fas fa-upload"></i> Upload Codebase Folder
+                </h2>
+                <p className="section-description">
+                  Select your project folder. Common artifacts (node_modules, .git) are skipped.
+                </p>
+                <div
+                  className={`drop-zone ${isDragging ? 'active' : ''}`}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  onClick={handleBrowseClick}
+                  role="button"
+                  tabIndex="0"
+                  aria-label="Drop code folder here or click to browse"
+                >
+                  <div className="drop-zone-content">
+                    <i className="fas fa-folder-open drop-zone-icon"></i>
+                    <p className="drop-zone-text">Drag & Drop Folder</p>
+                    <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', margin: '0.5rem 0' }}>or</p>
+                    <button type="button" className="btn">
+                      <i className="fas fa-search"></i> Browse Files
                     </button>
                   </div>
-                </>
-              )}
-            </div>
+                  <input
+                    type="file"
+                    ref={fileInputRef}
+                    className="file-input"
+                    onChange={handleFileSelect}
+                    webkitdirectory="true"
+                    directory="true"
+                    multiple
+                    disabled={isUploading || isProcessingRepo}
+                  />
+                </div>
+                {isFiltering && (
+                  <div className="filtering-overlay">
+                    <div className="filtering-content">
+                      <div className="filtering-spinner"></div>
+                      <p>Filtering files...</p>
+                    </div>
+                  </div>
+                )}
+                {totalFilesSelected > 0 && !isFiltering && (
+                  <>
+                    <div className="files-list">
+                      <p className="files-list-header">
+                        <i className="fas fa-list-ul"></i> Processing {filesToUpload.length} relevant files (out of {totalFilesSelected} selected)
+                      </p>
+                      {filesToUpload.map((file, index) => (
+                        <div key={file.name + index + file.size} className="files-list-item">
+                          <div className="file-item-content">
+                            <i className="fas fa-file-code"></i>
+                            <span className="file-item-text" title={file.webkitRelativePath || file.name}>
+                              {file.webkitRelativePath || file.name}
+                            </span>
+                          </div>
+                          <button
+                            className="remove-file-btn"
+                            onClick={(e) => { e.stopPropagation(); handleRemoveFile(index); }}
+                            title="Remove file"
+                            aria-label={`Remove file ${file.name}`}
+                            disabled={isUploading}
+                          >
+                            <i className="fas fa-times"></i>
+                          </button>
+                        </div>
+                      ))}
+                      {filesToUpload.length === 0 && (
+                        <div className="files-list-item" style={{ color: 'var(--warning-color)', fontStyle: 'italic' }}>
+                          All selected files/folders were ignored.
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
+                      <button
+                        className={`btn ${(isUploading || filesToUpload.length === 0) ? 'btn-disabled' : ''}`}
+                        onClick={handleUpload}
+                        disabled={isUploading || filesToUpload.length === 0 || isProcessingRepo}
+                      >
+                        {isUploading ? (
+                          <><i className="fas fa-spinner fa-spin"></i> Uploading...</>
+                        ) : (
+                          <><i className="fas fa-cogs"></i> Process {filesToUpload.length} Files</>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {activeInputMode === 'repo' && (
+              <>
+                <h2 className="section-title">
+                  <i className="fab fa-git-alt"></i> Process Public Repository
+                </h2>
+                <p className="section-description">
+                  Enter the URL of a public Git repository (e.g., GitHub, GitLab).
+                </p>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                  <input
+                    type="url"
+                    value={repoUrl}
+                    onChange={handleRepoUrlChange}
+                    placeholder="https://github.com/owner/repo.git"
+                    aria-label="Repository URL"
+                    disabled={isProcessingRepo || isUploading}
+                    style={{
+                      flexGrow: 1,
+                      padding: '0.6rem 0.8rem',
+                      borderRadius: '6px',
+                      border: '1px solid var(--card-border-color)',
+                      background: 'rgba(var(--card-bg-rgb), 0.8)',
+                      color: 'var(--text-color)',
+                      fontSize: '0.9rem'
+                    }}
+                  />
+                  <button
+                    className={`btn ${(isProcessingRepo || !repoUrl.trim()) ? 'btn-disabled' : ''}`}
+                    onClick={handleProcessRepo}
+                    disabled={isProcessingRepo || isUploading || !repoUrl.trim()}
+                  >
+                    {isProcessingRepo ? (
+                      <><i className="fas fa-spinner fa-spin"></i> Starting...</>
+                    ) : (
+                      <><i className="fas fa-cogs"></i> Process URL</>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {activeInputMode === 'website' && (
+              <>
+                <h2 className="section-title">
+                  <i className="fas fa-globe"></i> Process Public Website
+                </h2>
+                <p className="section-description">
+                  Enter the URL of a public website. The tool will crawl and extract text content.
+                </p>
+                <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                  <input
+                    type="url"
+                    value={websiteUrl}
+                    onChange={handleWebsiteUrlChange}
+                    placeholder="https://example.com"
+                    aria-label="Website URL"
+                    disabled={isProcessing}
+                    style={{
+                      flexGrow: 1,
+                      padding: '0.6rem 0.8rem',
+                      borderRadius: '6px',
+                      border: '1px solid var(--card-border-color)',
+                      background: 'rgba(var(--card-bg-rgb), 0.8)',
+                      color: 'var(--text-color)',
+                      fontSize: '0.9rem'
+                    }}
+                  />
+                  <button
+                    className={`btn ${(isProcessingWebsite || !websiteUrl.trim()) ? 'btn-disabled' : ''}`}
+                    onClick={handleProcessWebsite}
+                    disabled={isProcessing || !websiteUrl.trim()}
+                  >
+                    {isProcessingWebsite ? (
+                      <><i className="fas fa-spinner fa-spin"></i> Starting...</>
+                    ) : (
+                      <><i className="fas fa-cogs"></i> Process URL</>
+                    )}
+                  </button>
+                </div>
+              </>
+            )}
 
             {error && (
               <div className="status-card failed" style={{ marginTop: '2rem' }}>
@@ -477,14 +578,16 @@ function App() {
                 {jobStatus?.status === 'pending' && <><i className="fas fa-clock"></i> Queued...</>}
                 {jobStatus?.status === 'uploading' && <><i className="fas fa-spinner fa-spin"></i> Uploading Files...</>}
                 {jobStatus?.status === 'cloning' && <><i className="fas fa-spinner fa-spin"></i> Cloning Repository...</>}
-                {jobStatus?.status === 'processing' && <><i className="fas fa-cog fa-spin"></i> Analyzing Codebase...</>}
+                {jobStatus?.status === 'crawling' && <><i className="fas fa-spider"></i> Crawling Website...</>}
+                {jobStatus?.status === 'processing' && <><i className="fas fa-cog fa-spin"></i> Analyzing Content...</>}
                 {jobStatus?.status === 'completed' && <><i className="fas fa-check-circle"></i> Processing Complete!</>}
                 {jobStatus?.status === 'failed' && <><i className="fas fa-times-circle"></i> Processing Failed</>}
                 {!jobStatus && <><i className="fas fa-spinner fa-spin"></i> Loading Status...</>}
               </div>
 
               {(jobStatus?.status === 'pending' || jobStatus?.status === 'uploading' ||
-                jobStatus?.status === 'cloning' || jobStatus?.status === 'processing') && (
+                jobStatus?.status === 'cloning' || jobStatus?.status === 'crawling' ||
+                jobStatus?.status === 'processing') && (
                 <div className="progress-container">
                   <div className="progress-bar"></div>
                 </div>

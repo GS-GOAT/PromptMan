@@ -371,6 +371,14 @@ body::before {
   border-image-source: linear-gradient(to bottom, var(--warning-color), #ffeb3b);
 }
 
+.status-card.cloning {
+  border-image-source: linear-gradient(to bottom, var(--primary-color), var(--secondary-color));
+}
+
+.status-card.crawling {
+  border-image-source: linear-gradient(to bottom, #4a9eff, #00eaff);
+}
+
 .status-card.processing {
   border-image-source: linear-gradient(to bottom, var(--primary-color), var(--secondary-color));
 }
@@ -576,4 +584,16 @@ body::before {
   .section-container { padding: 1.5rem; }
   .drop-zone { padding: 2rem; }
   .btn { padding: 0.7rem 1.2rem; font-size: 0.85rem; }
+}
+
+/* Spider Icon Animation */
+@keyframes crawl {
+  0% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-2px) rotate(-10deg); }
+  75% { transform: translateY(2px) rotate(10deg); }
+  100% { transform: translateY(0) rotate(0deg); }
+}
+
+.fa-spider {
+  animation: crawl 2s ease-in-out infinite;
 }

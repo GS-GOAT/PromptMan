@@ -1,23 +1,22 @@
 # backend/main.py
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, HttpUrl
 import os
 import shutil
 import time
 from typing import List
 import uuid
 import asyncio
-import subprocess
 import logging
 import redis
 import json
 import re
 
-# Import the code service
+# Import the services
 from services.code_service import run_code2prompt
+from services.website_service import run_crawl4ai  # Add website service import
 
 # --- Configuration ---
 TEMP_DIR = "temp"
@@ -137,7 +136,7 @@ def cleanup_old_files(directory: str, max_age_seconds: int):
                     logger.info(f"Cleaned up old file: {item_path}")
                 elif os.path.isdir(item_path):
                     if item_path != directory:
-                        shutil.rmtree(item_path, ignore_errors=True)
+                        shutil.rmtree(item_path)
                         logger.info(f"Cleaned up old directory: {item_path}")
         except Exception as e:
             logger.warning(f"Error during cleanup of {item_path}: {e}")
@@ -153,6 +152,9 @@ async def cleanup_middleware(request: Request, call_next):
 # --- Repository Processing ---
 class RepoRequest(BaseModel):
     repo_url: str
+
+class WebsiteRequest(BaseModel):
+    website_url: HttpUrl  # Use Pydantic's HttpUrl for strong validation
 
 async def process_repository_job(job_id: str, repo_url: str):
     """Clones a repository (creating repo-named subdir) and handles code processing."""
@@ -256,6 +258,37 @@ async def process_repository_job(job_id: str, repo_url: str):
         logger.info(f"[Repo Job {job_id}] Cleaning up base clone directory {job_clone_base_dir}")
         shutil.rmtree(job_clone_base_dir, ignore_errors=True)
 
+async def process_website_job(job_id: str, website_url: str):
+    """Crawls a website using crawl4ai and saves the result."""
+    # Use .txt extension for website results
+    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.txt")
+
+    try:
+        logger.info(f"[Website Job {job_id}] Starting crawl for: {website_url}")
+        update_job_status(job_id, "crawling") # Use specific 'crawling' status
+
+        # Run the crawl4ai service function
+        result_content = await run_crawl4ai(website_url)
+
+        # Check for errors/warnings from the service
+        if result_content.startswith(("# Error:", "# Warning:")):
+            first_line = result_content.split('\n', 1)[0]
+            logger.warning(f"[Website Job {job_id}] crawl4ai service reported: {first_line}")
+            if result_content.startswith("# Error:"):
+                update_job_status(job_id, "failed", error=result_content)
+                return
+
+        # Save the result (which could be content or a warning starting with '# Warning:')
+        os.makedirs(RESULTS_DIR, exist_ok=True)
+        with open(result_file_path, "w", encoding="utf-8") as f:
+            f.write(result_content)
+        logger.info(f"[Website Job {job_id}] Output saved to {result_file_path}")
+        update_job_status(job_id, "completed", result_file=result_file_path)
+
+    except Exception as e:
+        logger.exception(f"[Website Job {job_id}] Unexpected error in background task: {e}")
+        update_job_status(job_id, "failed", error=f"Unexpected backend task error: {type(e).__name__}")
+
 # --- File Upload Background Task ---
 async def process_upload(temp_dir: str, job_id: str):
     """Handles code processing for direct file uploads."""
@@ -316,6 +349,18 @@ async def process_repo(repo_request: RepoRequest, background_tasks: BackgroundTa
     job_id = create_job()
     background_tasks.add_task(process_repository_job, job_id, repo_url)
     logger.info(f"Job {job_id}: Background repository processing scheduled for {repo_url}")
+
+    return {"job_id": job_id}
+
+@app.post("/api/process-website")
+async def process_website(website_request: WebsiteRequest, background_tasks: BackgroundTasks):
+    """Accepts a website URL, validates it, and starts background crawling."""
+    # Pydantic's HttpUrl model already performs validation
+    website_url = str(website_request.website_url)
+
+    job_id = create_job()
+    background_tasks.add_task(process_website_job, job_id, website_url)
+    logger.info(f"Job {job_id}: Background website processing scheduled for {website_url}")
 
     return {"job_id": job_id}
 
@@ -390,19 +435,49 @@ async def download_file(job_id: str):
     """Allows downloading the result file for a completed job."""
     status_info = get_job_status(job_id)
     if not status_info:
-        raise HTTPException(status_code=404, detail="Job not found or expired")
+        raise HTTPException(status_code=404, detail="Job not found or expired.")
 
-    if status_info.get("status") != "completed":
-        raise HTTPException(status_code=404, detail=f"Job not completed. Current status: {status_info.get('status')}")
+    job_current_status = status_info.get("status")
+    
+    if job_current_status == "failed":
+        error_message = status_info.get('error', 'Unknown processing error')
+        if error_message.startswith("# Error:"):
+            error_message = error_message.split('\n', 1)[0]
+        raise HTTPException(status_code=400, detail=f"Job failed: {error_message[:200]}")
+
+    if job_current_status != "completed":
+        raise HTTPException(status_code=400,
+                          detail=f"Job not completed. Current status: {job_current_status or 'unknown'}")
 
     file_path = status_info.get("result_file")
     if not file_path:
-        raise HTTPException(status_code=500, detail="Result file path missing.")
+        logger.error(f"Job {job_id} is 'completed' but result_file path is missing in Redis data.")
+        raise HTTPException(status_code=500, detail="Internal error: Result file path missing for completed job.")
 
     if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Result file not found (may have been cleaned up).")
+        logger.error(f"Result file not found at path stored in Redis: {file_path} for job {job_id}")
+        job_updated_time = status_info.get("updated_at", 0)
+        if time.time() - job_updated_time > CLEANUP_AGE_SECONDS:
+            raise HTTPException(status_code=404, detail="Result file not found (likely cleaned up due to age).")
+        else:
+            raise HTTPException(status_code=404, detail="Result file not found on server (unexpectedly missing).")
 
-    return FileResponse(file_path, filename=f"promptman_result_{job_id}.md", media_type='text/markdown')
+    # Determine filename and media type based on extension
+    _, extension = os.path.splitext(file_path)
+    extension = extension.lower()
+
+    if extension == ".txt":
+        filename = f"promptman_result_{job_id}.txt"
+        media_type = "text/plain"
+    elif extension == ".md":
+        filename = f"promptman_result_{job_id}.md"
+        media_type = "text/markdown"
+    else:
+        logger.warning(f"Unexpected file extension '{extension}' for job {job_id}. Serving as octet-stream.")
+        filename = f"promptman_result_{job_id}{extension}"
+        media_type = "application/octet-stream"
+
+    return FileResponse(file_path, filename=filename, media_type=media_type)
 
 @app.get("/")
 async def root():
