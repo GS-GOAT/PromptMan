@@ -597,3 +597,108 @@ body::before {
 .fa-spider {
   animation: crawl 2s ease-in-out infinite;
 }
+
+/* --- Crawl Options --- */
+.crawl-options-grid {
+  border-left: 3px solid var(--primary-color);
+  padding-left: 1.5rem;
+  margin-top: 1rem;
+  margin-bottom: 2rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem 1.5rem;
+}
+
+.crawl-options-grid .option-item {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+}
+
+/* Ensure consistent input styling */
+.crawl-options-grid input[type="number"],
+.crawl-options-grid input[type="text"],
+.crawl-options-grid input[type="checkbox"] {
+  box-sizing: border-box;
+  font-size: 0.9rem;
+  background: rgba(var(--card-bg-rgb), 0.9);
+  color: var(--text-color);
+  border: 1px solid var(--card-border-color);
+  border-radius: 4px;
+}
+
+.crawl-options-grid input[type="number"],
+.crawl-options-grid input[type="text"] {
+  padding: 0.5rem 0.7rem;
+  width: 100%;
+}
+
+.crawl-options-grid input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  margin-top: 0.2rem;
+  accent-color: var(--primary-color);
+  cursor: pointer;
+}
+
+.crawl-options-grid label {
+  display: block;
+  margin-bottom: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  cursor: default;
+}
+
+/* Specific styling for checkbox row */
+.crawl-options-grid .option-item.checkbox-item {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.crawl-options-grid .option-item.checkbox-item label {
+  margin-bottom: 0;
+  cursor: pointer;
+}
+
+/* Style helper text */
+.crawl-options-grid small {
+  display: block;
+  margin-top: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  opacity: 0.8;
+}
+
+/* Style the toggle button */
+button[aria-expanded] {
+  background: none;
+  border: none;
+  color: var(--primary-color);
+  cursor: pointer;
+  padding: 0.5rem 0;
+  font-size: 0.9rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  border-top: 1px solid var(--card-border-color);
+  padding-top: 1rem;
+  width: 100%;
+  justify-content: flex-start;
+}
+
+button[aria-expanded]:hover {
+  filter: brightness(1.2);
+}
+
+button[aria-expanded] i {
+  transition: transform 0.2s ease-in-out;
+}
+
+button[aria-expanded="true"] i {
+  transform: rotate(90deg);
+}

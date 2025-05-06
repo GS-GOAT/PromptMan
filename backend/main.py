@@ -2,11 +2,11 @@
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, Field
 import os
 import shutil
 import time
-from typing import List
+from typing import List, Optional
 import uuid
 import asyncio
 import logging
@@ -153,8 +153,15 @@ async def cleanup_middleware(request: Request, call_next):
 class RepoRequest(BaseModel):
     repo_url: str
 
+# --- MODIFIED: WebsiteRequest Model ---
 class WebsiteRequest(BaseModel):
-    website_url: HttpUrl  # Use Pydantic's HttpUrl for strong validation
+    website_url: HttpUrl
+    max_depth: Optional[int] = Field(None, ge=0, le=10, description="Max crawl depth (0=start page only)")
+    max_pages: Optional[int] = Field(None, ge=1, le=1000, description="Max total pages to crawl")
+    stay_on_domain: Optional[bool] = Field(None, description="Restrict crawl to initial domain")
+    include_patterns: Optional[str] = Field(None, description="Comma-separated URL wildcard patterns to include")
+    exclude_patterns: Optional[str] = Field(None, description="Comma-separated URL wildcard patterns to exclude")
+    keywords: Optional[str] = Field(None, description="Comma-separated keywords to prioritize relevant pages")
 
 async def process_repository_job(job_id: str, repo_url: str):
     """Clones a repository (creating repo-named subdir) and handles code processing."""
@@ -258,19 +265,35 @@ async def process_repository_job(job_id: str, repo_url: str):
         logger.info(f"[Repo Job {job_id}] Cleaning up base clone directory {job_clone_base_dir}")
         shutil.rmtree(job_clone_base_dir, ignore_errors=True)
 
-async def process_website_job(job_id: str, website_url: str):
-    """Crawls a website using crawl4ai and saves the result."""
-    # Use .txt extension for website results
-    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.txt")
+# --- MODIFIED: process_website_job ---
+async def process_website_job(job_id: str, website_url: str,
+                            max_depth: Optional[int] = None,
+                            max_pages: Optional[int] = None,
+                            stay_on_domain: Optional[bool] = None,
+                            include_patterns: Optional[str] = None,
+                            exclude_patterns: Optional[str] = None,
+                            keywords: Optional[str] = None):
+    """Crawls a website using crawl4ai with advanced options and saves the result."""
+    # Use .md extension for website results
+    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
 
     try:
-        logger.info(f"[Website Job {job_id}] Starting crawl for: {website_url}")
-        update_job_status(job_id, "crawling") # Use specific 'crawling' status
+        logger.info(f"[Website Job {job_id}] Starting enhanced crawl for: {website_url}")
+        update_job_status(job_id, "crawling")
 
-        # Run the crawl4ai service function
-        result_content = await run_crawl4ai(website_url)
+        # Run the crawl4ai service with all options
+        result_content = await run_crawl4ai(
+            url=website_url,
+            max_depth=max_depth,
+            max_pages=max_pages,
+            stay_on_domain=stay_on_domain,
+            include_patterns_str=include_patterns,
+            exclude_patterns_str=exclude_patterns,
+            keywords_str=keywords
+        )
+        logger.info(f"[Website Job {job_id}] crawl4ai service finished.")
 
-        # Check for errors/warnings from the service
+        # Check result
         if result_content.startswith(("# Error:", "# Warning:")):
             first_line = result_content.split('\n', 1)[0]
             logger.warning(f"[Website Job {job_id}] crawl4ai service reported: {first_line}")
@@ -278,7 +301,7 @@ async def process_website_job(job_id: str, website_url: str):
                 update_job_status(job_id, "failed", error=result_content)
                 return
 
-        # Save the result (which could be content or a warning starting with '# Warning:')
+        # Save result
         os.makedirs(RESULTS_DIR, exist_ok=True)
         with open(result_file_path, "w", encoding="utf-8") as f:
             f.write(result_content)
@@ -352,14 +375,25 @@ async def process_repo(repo_request: RepoRequest, background_tasks: BackgroundTa
 
     return {"job_id": job_id}
 
+# --- MODIFIED: process_website Endpoint ---
 @app.post("/api/process-website")
 async def process_website(website_request: WebsiteRequest, background_tasks: BackgroundTasks):
-    """Accepts a website URL, validates it, and starts background crawling."""
+    """Accepts a website URL and crawl options, validates them, and starts background crawling."""
     # Pydantic's HttpUrl model already performs validation
     website_url = str(website_request.website_url)
 
     job_id = create_job()
-    background_tasks.add_task(process_website_job, job_id, website_url)
+    background_tasks.add_task(
+        process_website_job,
+        job_id=job_id,
+        website_url=website_url,
+        max_depth=website_request.max_depth,
+        max_pages=website_request.max_pages,
+        stay_on_domain=website_request.stay_on_domain,
+        include_patterns=website_request.include_patterns,
+        exclude_patterns=website_request.exclude_patterns,
+        keywords=website_request.keywords
+    )
     logger.info(f"Job {job_id}: Background website processing scheduled for {website_url}")
 
     return {"job_id": job_id}
@@ -466,10 +500,7 @@ async def download_file(job_id: str):
     _, extension = os.path.splitext(file_path)
     extension = extension.lower()
 
-    if extension == ".txt":
-        filename = f"promptman_result_{job_id}.txt"
-        media_type = "text/plain"
-    elif extension == ".md":
+    if extension == ".md":
         filename = f"promptman_result_{job_id}.md"
         media_type = "text/markdown"
     else:
