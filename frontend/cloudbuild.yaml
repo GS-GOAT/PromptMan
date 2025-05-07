@@ -1,0 +1,17 @@
+# PromptMan/frontend/cloudbuild.yaml
+steps:
+- name: 'gcr.io/cloud-builders/docker'
+  args: [
+    'build',
+    # Sets the default API base URL for the React app
+    '--build-arg', 'REACT_APP_API_BASE_URL=/api',
+    # Receives the GA ID from the GitHub Actions workflow's --substitutions flag
+    '--build-arg', 'REACT_APP_GA_MEASUREMENT_ID=${_REACT_APP_GA_MEASUREMENT_ID}',
+    # Tags the image using the name provided by the --substitutions flag
+    '-t', '${_IMAGE_TAG_NAME}',
+    # Build context is the current directory (which will be 'frontend/' when Cloud Build runs this)
+    '.'
+  ]
+# Specifies the image to push to Artifact Registry after the build step
+images:
+- '${_IMAGE_TAG_NAME}'
