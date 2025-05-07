@@ -1,7 +1,29 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import ReactGA from 'react-ga4';
 import './App.css';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "/api";
+
+// Initialize Google Analytics
+const GA_MEASUREMENT_ID = process.env.REACT_APP_GA_MEASUREMENT_ID;
+if (GA_MEASUREMENT_ID) {
+  ReactGA.initialize(GA_MEASUREMENT_ID);
+  console.log('GA Initialized with ID:', GA_MEASUREMENT_ID);
+} else {
+  console.warn('REACT_APP_GA_MEASUREMENT_ID not found in .env. Analytics will not be sent.');
+}
+
+// Helper function for sending GA events
+const sendGAEvent = (category, action, label = null, value = null) => {
+  if (GA_MEASUREMENT_ID) {
+    ReactGA.event({
+      category,
+      action,
+      ...(label && { label }),
+      ...(value && { value })
+    });
+  }
+};
 
 // --- Default Values ---
 const DEFAULT_CRAWL_MAX_DEPTH = 0;
@@ -53,6 +75,19 @@ function App() {
   const STATUS_POLL_INTERVAL = 2000;
   const STATUS_POLL_MAX_TIME = 30 * 60 * 1000;
 
+  // --- Common Job Handlers ---
+  const handleJobSubmitError = useCallback((error, jobType, input = '') => {
+    console.error(`Error processing ${jobType}:`, error);
+    setError(error.message);
+    setJobId(null);
+    sendGAEvent('Job Submit', 'Error', `${jobType} - ${error.message.substring(0, 100)}`);
+  }, []);
+
+  const handleJobSubmitSuccess = useCallback((data, jobType, input = '') => {
+    setJobId(data.job_id);
+    sendGAEvent('Job Submit', 'Success', jobType);
+  }, []);
+
   // --- Status Polling Effect ---
   useEffect(() => {
     let intervalId = null;
@@ -60,21 +95,29 @@ function App() {
 
     const checkJobStatus = async () => {
       if (!jobId) return;
-
       try {
         const response = await fetch(`${API_BASE_URL}/api/job-status/${jobId}`);
         if (!response.ok) {
-          if (response.status === 404) {
-            setError(`Job ${jobId} not found or may have expired.`);
-          } else {
-            throw new Error(`Error checking job status: ${response.statusText}`);
-          }
+          let errorMsg = `Job ${jobId} status check failed: ${response.status}`;
+          if (response.status === 404) errorMsg = `Job ${jobId} not found or expired.`;
+          setError(errorMsg);
+          sendGAEvent('Job Status', 'Error - API Fetch', `${jobId} - ${response.status}`);
           clearInterval(intervalId);
           intervalId = null;
           return;
         }
 
         const data = await response.json();
+        const jobType = data.type || 'unknown';
+
+        // Only update and send event if status string changes
+        if (jobStatus?.status !== data.status) {
+          if (data.status === 'completed') {
+            sendGAEvent('Job Status', 'Completed', jobType);
+          } else if (data.status === 'failed') {
+            sendGAEvent('Job Status', 'Failed', jobType);
+          }
+        }
         setJobStatus(data);
 
         if (data.status === 'completed' || data.status === 'failed') {
@@ -83,13 +126,15 @@ function App() {
         }
 
         if (intervalId && Date.now() - startTime > STATUS_POLL_MAX_TIME) {
+          setError('Polling timed out. Please check status manually or try again.');
+          sendGAEvent('Job Status', 'Error - Polling Timeout', jobType);
           clearInterval(intervalId);
           intervalId = null;
-          setError('Polling timed out. Please check status manually or try again.');
         }
       } catch (err) {
         console.error('Error checking job status:', err);
         setError(err.message);
+        sendGAEvent('Job Status', 'Error - Client Exception', jobId);
         if (intervalId) clearInterval(intervalId);
         intervalId = null;
       }
@@ -137,6 +182,8 @@ function App() {
   const handleFileSelect = useCallback((event) => {
     const fileList = event.target.files || [];
     if (fileList.length === 0) return;
+    
+    sendGAEvent('User Interaction', 'Select Files', 'upload', fileList.length);
     setIsFiltering(true);
     setError(null);
     setFilesToUpload([]);
@@ -146,6 +193,10 @@ function App() {
       setFilesToUpload(filteredFiles);
       setIsFiltering(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+      
+      if (filteredFiles.length === 0) {
+        sendGAEvent('User Interaction', 'No Valid Files', 'upload', fileList.length);
+      }
     }, 0);
   }, [filterIgnoredFiles]);
 
@@ -194,10 +245,13 @@ function App() {
       setError('No relevant files selected after filtering.');
       return;
     }
+
     setIsUploading(true);
     setError(null);
     setJobId(null);
     setJobStatus(null);
+
+    sendGAEvent('Job Submit', 'Start', 'upload', filesToUpload.length);
 
     const formData = new FormData();
     filesToUpload.forEach(file => {
@@ -209,6 +263,7 @@ function App() {
         method: 'POST',
         body: formData
       });
+
       if (!response.ok) {
         let errorDetail = `Upload failed (${response.status})`;
         try {
@@ -217,18 +272,17 @@ function App() {
         } catch (e) { /* ignore */ }
         throw new Error(errorDetail);
       }
+
       const data = await response.json();
+      handleJobSubmitSuccess(data, 'upload', `${filesToUpload.length} files`);
       setFilesToUpload([]);
       setTotalFilesSelected(0);
-      setJobId(data.job_id);
     } catch (err) {
-      console.error('Error uploading files:', err);
-      setError(err.message);
-      setJobId(null);
+      handleJobSubmitError(err, 'upload', `${filesToUpload.length} files`);
     } finally {
       setIsUploading(false);
     }
-  }, [filesToUpload]);
+  }, [filesToUpload, handleJobSubmitSuccess, handleJobSubmitError]);
 
   const handleRepoUrlChange = useCallback((event) => {
     setRepoUrl(event.target.value);
@@ -250,6 +304,8 @@ function App() {
     setJobId(null);
     setJobStatus(null);
 
+    sendGAEvent('Job Submit', 'Start', 'repo');
+
     try {
       const response = await fetch(`${API_BASE_URL}/api/process-repo`, {
         method: 'POST',
@@ -267,22 +323,19 @@ function App() {
       }
 
       const data = await response.json();
+      handleJobSubmitSuccess(data, 'repo', repoUrl);
       setRepoUrl('');
-      setJobId(data.job_id);
     } catch (err) {
-      console.error('Error processing repository URL:', err);
-      setError(err.message);
-      setJobId(null);
+      handleJobSubmitError(err, 'repo', repoUrl);
     } finally {
       setIsProcessingRepo(false);
     }
-  }, [repoUrl]);
+  }, [repoUrl, handleJobSubmitSuccess, handleJobSubmitError]);
 
   const handleWebsiteUrlChange = useCallback((event) => {
     setWebsiteUrl(event.target.value);
   }, []);
 
-  // --- UPDATED: Website Handlers ---
   const handleMaxDepthChange = useCallback((e) => {
     setCrawlMaxDepth(e.target.value === '' ? '' : Math.min(10, Math.max(0, parseInt(e.target.value, 10) || 0)));
   }, []);
@@ -324,7 +377,8 @@ function App() {
     setJobId(null);
     setJobStatus(null);
 
-    // Prepare payload: Send null for empty number inputs, null for empty strings, always send boolean
+    sendGAEvent('Job Submit', 'Start', 'website');
+
     const payload = {
       website_url: url,
       max_depth: crawlMaxDepth === '' ? null : crawlMaxDepth,
@@ -352,25 +406,31 @@ function App() {
       }
 
       const data = await response.json();
+      handleJobSubmitSuccess(data, 'website', url);
       setWebsiteUrl('');
-      setJobId(data.job_id);
     } catch (err) {
-      console.error('Error processing website URL:', err);
-      setError(err.message);
-      setJobId(null);
+      handleJobSubmitError(err, 'website', url);
     } finally {
       setIsProcessingWebsite(false);
     }
-  }, [websiteUrl, crawlMaxDepth, crawlMaxPages, crawlStayOnDomain, crawlIncludePatterns, crawlExcludePatterns, crawlKeywords]);
+  }, [websiteUrl, crawlMaxDepth, crawlMaxPages, crawlStayOnDomain, 
+      crawlIncludePatterns, crawlExcludePatterns, crawlKeywords,
+      handleJobSubmitSuccess, handleJobSubmitError]);
 
   // --- Result Handling ---
   const handleDownload = useCallback(() => {
     if (!jobId || !jobStatus || jobStatus.status !== 'completed') return;
+    
+    const jobType = jobStatus.type || 'unknown';
+    sendGAEvent('User Interaction', 'Download Result', jobType);
+    
     window.location.href = `${API_BASE_URL}/api/download/${jobId}`;
   }, [jobId, jobStatus]);
 
-  // --- MODIFIED: handleReset ---
+  // --- Updated Reset Handler ---
   const handleReset = useCallback(() => {
+    sendGAEvent('User Interaction', 'Reset Form');
+    
     setFilesToUpload([]);
     setTotalFilesSelected(0);
     setRepoUrl('');

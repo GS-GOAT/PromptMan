@@ -5,15 +5,18 @@ WORKDIR /app
 
 # Copy package files and install dependencies
 COPY package.json package-lock.json ./
-# RUN npm ci --silent
 RUN npm install --silent
 
 # Copy the rest of the frontend source code
 COPY . .
 
-# Set the production API URL build argument (will be passed by Docker Compose)
+# Set environment variables from build args
 ARG REACT_APP_API_BASE_URL=/api
 ENV REACT_APP_API_BASE_URL=$REACT_APP_API_BASE_URL
+
+# Add GA4 build argument and environment variable
+ARG REACT_APP_GA_MEASUREMENT_ID
+ENV REACT_APP_GA_MEASUREMENT_ID=$REACT_APP_GA_MEASUREMENT_ID
 
 # Build the static files
 RUN npm run build

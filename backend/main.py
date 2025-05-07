@@ -66,7 +66,8 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(TEMP_CLONES_DIR, exist_ok=True)
 
 # --- Job Management Functions ---
-def create_job():
+def create_job(job_type: str):
+    """Creates a new job, storing its type."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Job storage unavailable (Redis connection failed)")
     job_id = str(uuid.uuid4())
@@ -75,10 +76,15 @@ def create_job():
         "created_at": time.time(),
         "updated_at": time.time(),
         "error": None,
-        "result_file": None
+        "result_file": None,
+        "type": job_type  # Store job type
     }
-    redis_client.set(f"job:{job_id}", json.dumps(job_data), ex=JOB_EXPIRY_SECONDS)
-    logger.info(f"Job created in Redis: {job_id}")
+    try:
+        redis_client.set(f"job:{job_id}", json.dumps(job_data), ex=JOB_EXPIRY_SECONDS)
+        logger.info(f"Job created in Redis: {job_id} (Type: {job_type})")
+    except redis.exceptions.RedisError as e:
+        logger.error(f"Redis error creating job {job_id}: {e}")
+        raise HTTPException(status_code=503, detail="Job storage error during creation")
     return job_id
 
 def update_job_status(job_id, status, error=None, result_file=None):
@@ -365,24 +371,18 @@ async def process_upload(temp_dir: str, job_id: str):
 async def process_repo(repo_request: RepoRequest, background_tasks: BackgroundTasks):
     """Accepts a Git repository URL and starts background processing."""
     repo_url = repo_request.repo_url.strip()
-
     if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', repo_url):
         raise HTTPException(status_code=400, detail="Invalid repository URL format.")
-
-    job_id = create_job()
+    job_id = create_job(job_type="repo")  # Changed from "repository" to "repo"
     background_tasks.add_task(process_repository_job, job_id, repo_url)
     logger.info(f"Job {job_id}: Background repository processing scheduled for {repo_url}")
-
     return {"job_id": job_id}
 
-# --- MODIFIED: process_website Endpoint ---
 @app.post("/api/process-website")
 async def process_website(website_request: WebsiteRequest, background_tasks: BackgroundTasks):
     """Accepts a website URL and crawl options, validates them, and starts background crawling."""
-    # Pydantic's HttpUrl model already performs validation
     website_url = str(website_request.website_url)
-
-    job_id = create_job()
+    job_id = create_job(job_type="website")  # Explicit job_type parameter
     background_tasks.add_task(
         process_website_job,
         job_id=job_id,
@@ -395,13 +395,12 @@ async def process_website(website_request: WebsiteRequest, background_tasks: Bac
         keywords=website_request.keywords
     )
     logger.info(f"Job {job_id}: Background website processing scheduled for {website_url}")
-
     return {"job_id": job_id}
 
 @app.post("/api/upload-codebase")
 async def upload_codebase(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
     """Accepts folder uploads, saves files, and starts background processing."""
-    job_id = create_job()
+    job_id = create_job(job_type="upload")  # Explicit job_type parameter
     upload_dir = os.path.join(TEMP_DIR, job_id)
     os.makedirs(upload_dir, exist_ok=True)
 
