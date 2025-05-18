@@ -10,8 +10,9 @@ env:
   # GCP Settings - Pulled from GitHub Secrets
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: ${{ secrets.GCP_REGION }}
-  ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO }} # e.g., asia-south1-docker.pkg.dev/your-project-id/promptman-repo
+  ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO }} 
   
+  ANALYTICS_DATABASE_URL: ${{ secrets.ANALYTICS_DATABASE_URL }}
   # Image and Service Naming Conventions
   BACKEND_IMAGE_NAME: promptman-backend
   FRONTEND_IMAGE_NAME: promptman-frontend
@@ -233,17 +234,23 @@ jobs:
           IMAGE_URI="${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Deploying Backend Image: $IMAGE_URI"
           
+          ENV_VARS="PYTHONUNBUFFERED=1"
+          ENV_VARS+=",REDIS_HOST=${{ secrets.PROD_REDIS_HOST_IP }}"
+          ENV_VARS+=",REDIS_PORT=${{ secrets.PROD_REDIS_INSTANCE_PORT }}"
+          ENV_VARS+=",ALLOWED_ORIGINS=${{ secrets.PROD_BACKEND_ALLOWED_ORIGINS }}"
+          ENV_VARS+=",ANALYTICS_DATABASE_URL=${{ secrets.ANALYTICS_DATABASE_URL }}"
+
           gcloud run deploy ${{ env.BACKEND_SERVICE_NAME }} \
             --image "$IMAGE_URI" \
             --platform managed \
             --region ${{ env.GCP_REGION }} \
             --port 8000 \
             --allow-unauthenticated \
-            --set-env-vars="PYTHONUNBUFFERED=1,REDIS_HOST=${{ secrets.PROD_REDIS_HOST_IP }},REDIS_PORT=${{ secrets.PROD_REDIS_INSTANCE_PORT }},ALLOWED_ORIGINS=${{ secrets.PROD_BACKEND_ALLOWED_ORIGINS }}" \
+            --set-env-vars="$ENV_VARS" \
             --vpc-connector "${{ env.VPC_CONNECTOR_NAME }}" \
             --vpc-egress=all-traffic \
-            --memory=2Gi \
-            --cpu=1 \
+            --memory=4Gi \
+            --cpu=2 \
             --min-instances=0 \
             --project=${{ env.GCP_PROJECT_ID }} \
             --quiet
@@ -296,5 +303,7 @@ jobs:
             --port 80 \
             --allow-unauthenticated \
             --set-env-vars="BACKEND_SERVICE_URL=${BACKEND_URL},BACKEND_SERVICE_HOST=${BACKEND_HOST}" \
+            --memory=2Gi \
+            --cpu=1 \
             --project=${{ env.GCP_PROJECT_ID }} \
             --quiet

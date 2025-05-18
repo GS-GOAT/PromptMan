@@ -50,10 +50,13 @@ async def run_crawl4ai(url: str,
         keywords_str: Comma-separated keywords for relevance-based crawling
 
     Returns:
-        Markdown-formatted content string or error/warning message
+        Dictionary containing:
+        - markdown_content: Markdown-formatted content string or error/warning message
+        - pages_processed: Number of pages successfully processed
     """
     logger.info(f"Starting enhanced crawl4ai for {url}")
     output_content = None
+    pages_processed = 0
 
     try:
         # --- Apply Defaults ---
@@ -155,33 +158,44 @@ async def run_crawl4ai(url: str,
 
                 if all_markdown:
                     output_content = f"# Crawl Results for: {url}\n" + "\n\n---\n".join(all_markdown)
-                    logger.info(f"Crawl aggregated for {url}. Final length: {len(output_content)}. Pages processed: {len(results_list)}")
+                    pages_processed = len(results_list)
+                    logger.info(f"Crawl aggregated for {url}. Final length: {len(output_content)}. Pages processed: {pages_processed}")
                 else:
                     # Crawled pages but no markdown extracted from any
                     logger.warning(f"Crawl completed for {url} ({len(results_list)} pages), but no markdown content extracted.")
                     output_content = f"# Warning: No Content Extracted\n\nCrawled {len(results_list)} pages for `{url}`, but no text content could be extracted from them."
+                    pages_processed = len(results_list)
 
             else:
                 # No results in the list, implies nothing was crawled successfully (filtered out, empty site, etc.)
                 logger.warning(f"Crawl for {url} returned no results. Filters might be too strict or site empty/inaccessible.")
                 output_content = f"# Warning: No Pages Crawled\n\nNo pages matching the criteria were successfully crawled for `{url}`."
+                pages_processed = 0
 
     except ImportError as e:
         logger.error(f"ImportError using crawl4ai components: {e}.")
         output_content = f"# Error: Library Import Failed\n\nCould not import required components: {e}."
+        pages_processed = 0
     except TypeError as e:
         logger.exception(f"TypeError during crawl4ai configuration or execution for {url}: {e}")
         output_content = f"# Error: Configuration Error\n\nInvalid configuration passed to crawl4ai: {e}"
+        pages_processed = 0
     except asyncio.TimeoutError:
         logger.error(f"Crawl operation timed out for {url}")
         output_content = f"# Error: Operation Timed Out\n\nThe crawl operation for `{url}` timed out."
+        pages_processed = 0
     except Exception as e:
         logger.exception(f"An unexpected error occurred while running crawl4ai library for {url}: {e}")
         output_content = f"# Error: Unexpected Crawl Failure\n\nAn error occurred:\n```\n{traceback.format_exc()}\n```"
+        pages_processed = 0
 
     # Final fallback
     if output_content is None:
         logger.error(f"run_crawl4ai logic completed for {url} but output_content is None.")
         output_content = "# Error: Unknown internal processing error during crawl."
+        pages_processed = 0
 
-    return output_content
+    return {
+        "markdown_content": output_content,
+        "pages_processed": pages_processed
+    }

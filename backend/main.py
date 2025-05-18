@@ -1,5 +1,5 @@
 # backend/main.py
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, BackgroundTasks, Depends, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, HttpUrl, Field
@@ -7,16 +7,25 @@ import os
 import shutil
 import time
 from typing import List, Optional
-import uuid
+import uuid as app_uuid
 import asyncio
 import logging
 import redis
 import json
 import re
+import datetime
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import select
 
 # Import the services
 from services.code_service import run_code2prompt
-from services.website_service import run_crawl4ai  # Add website service import
+from services.website_service import run_crawl4ai
+
+# Analytics DB imports
+from analytics_db import (
+    init_analytics_db, get_analytics_session_context, get_analytics_session_dependency, analytics_engine,
+    UploadJobAnalytics, RepoJobAnalytics, WebsiteJobAnalytics
+)
 
 # --- Configuration ---
 TEMP_DIR = "temp"
@@ -70,7 +79,7 @@ def create_job(job_type: str):
     """Creates a new job, storing its type."""
     if not redis_client:
         raise HTTPException(status_code=503, detail="Job storage unavailable (Redis connection failed)")
-    job_id = str(uuid.uuid4())
+    job_id = str(app_uuid.uuid4())
     job_data = {
         "status": "pending",
         "created_at": time.time(),
@@ -169,126 +178,204 @@ class WebsiteRequest(BaseModel):
     exclude_patterns: Optional[str] = Field(None, description="Comma-separated URL wildcard patterns to exclude")
     keywords: Optional[str] = Field(None, description="Comma-separated keywords to prioritize relevant pages")
 
-async def process_repository_job(job_id: str, repo_url: str):
-    """Clones a repository (creating repo-named subdir) and handles code processing."""
-    # Define the base directory for this job's clone operation
-    job_clone_base_dir = os.path.join(TEMP_CLONES_DIR, job_id)
-    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
-    # We expect the actual code path to be detected later
-    input_path_for_service = None # Will be determined after clone
+@app.on_event("startup")
+async def on_startup():
+    if analytics_engine:
+        await init_analytics_db()
+    else:
+        logger.warning("Analytics database URL not configured or engine creation failed. Analytics features will be disabled.")
+    
+    # Your existing Redis client initialization
+    global redis_client
+    try:
+        redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
+        redis_client.ping()
+        logger.info(f"Successfully connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
+    except redis.exceptions.ConnectionError as e:
+        logger.error(f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT} - {e}")
+        redis_client = None
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis client - {e}")
+        redis_client = None
+
+# Helper function for directory size calculation
+def get_dir_size(path='.'):
+    total = 0
+    try:
+        for entry in os.scandir(path):
+            if entry.is_file(follow_symlinks=False):
+                total += entry.stat(follow_symlinks=False).st_size
+            elif entry.is_dir(follow_symlinks=False):
+                try:
+                    total += get_dir_size(entry.path)
+                except OSError:
+                    logger.warning(f"Could not access {entry.path} to calculate size.")
+    except FileNotFoundError:
+        logger.warning(f"Path not found during size calculation: {path}")
+    except PermissionError:
+        logger.warning(f"Permission denied for path: {path}")
+    return total
+
+async def process_repository_job(job_id_str: str, repo_url: str):
+    job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+    job_clone_base_dir = os.path.join(TEMP_CLONES_DIR, job_id_str)
+    result_file_path_on_disk = os.path.join(RESULTS_DIR, f"{job_id_str}.md")
+    
+    overall_task_start_time = time.perf_counter()
+    git_clone_duration: Optional[float] = None
+    code_analysis_duration: Optional[float] = None
+    cloned_repo_name_capture: Optional[str] = None
+    cloned_repo_size_capture: Optional[int] = None
+    clone_success_flag = False
+    output_file_size_capture: Optional[int] = None
+    final_status_for_analytics = "failed"
+    error_msg_for_analytics: Optional[str] = None
+    error_type_for_analytics: Optional[str] = None
+    input_path_for_service: Optional[str] = None
 
     try:
-        # Create the unique base directory for this job
         os.makedirs(job_clone_base_dir, exist_ok=True)
-        logger.info(f"[Repo Job {job_id}] Starting cloning: {repo_url} into base dir {job_clone_base_dir}")
-        update_job_status(job_id, "cloning")
+        update_job_status(job_id_str, "cloning")
 
-        # Let git create the repo-named subdirectory
-        cmd = ['git', 'clone', '--depth', '1', repo_url]
+        t_clone_start = time.perf_counter()
+        cmd = ['git', 'clone', '--depth', '1', repo_url, '.']
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=job_clone_base_dir # Run git in the base directory
+            cwd=job_clone_base_dir
         )
 
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=300.0)
         except asyncio.TimeoutError:
-            logger.error(f"[Repo Job {job_id}] Git clone timed out after 300 seconds.")
-            update_job_status(job_id, "failed", error="Repository cloning timed out")
-            try: process.kill()
-            except ProcessLookupError: pass
-            return
+            logger.error(f"[Repo Job {job_id_str}] Git clone timed out.")
+            update_job_status(job_id_str, "failed", error="Repository cloning timed out")
+            error_msg_for_analytics = "Repository cloning timed out"
+            error_type_for_analytics = "TimeoutError"
+            raise
+
+        t_clone_end = time.perf_counter()
+        git_clone_duration = t_clone_end - t_clone_start
 
         if process.returncode != 0:
             error_output = stderr.decode().strip() if stderr else "Unknown clone error"
-            logger.error(f"[Repo Job {job_id}] Git clone failed: {error_output}")
-            update_job_status(job_id, "failed", error=f"Failed to clone repository: {error_output[:200]}")
-            return
+            logger.error(f"[Repo Job {job_id_str}] Git clone failed: {error_output}")
+            update_job_status(job_id_str, "failed", error=f"Failed to clone repository: {error_output[:200]}")
+            error_msg_for_analytics = f"Failed to clone repository: {error_output[:200]}"
+            error_type_for_analytics = "CloneError"
+            raise Exception(error_msg_for_analytics)
 
-        logger.info(f"[Repo Job {job_id}] Cloning successful.")
+        clone_success_flag = True
+        logger.info(f"[Repo Job {job_id_str}] Cloning successful.")
+        cloned_repo_name_capture = repo_url.split('/')[-1].replace('.git', '') if repo_url else "cloned_repo"
+        cloned_repo_size_capture = get_dir_size(job_clone_base_dir)
+        input_path_for_service = job_clone_base_dir
 
-        # Determine effective input directory
-        items_in_base_dir = os.listdir(job_clone_base_dir)
-        if len(items_in_base_dir) == 1:
-            # Expecting exactly one item: the directory named after the repo
-            repo_subdir_name = items_in_base_dir[0]
-            potential_project_dir = os.path.join(job_clone_base_dir, repo_subdir_name)
-            if os.path.isdir(potential_project_dir):
-                input_path_for_service = potential_project_dir
-                logger.info(f"[Repo Job {job_id}] Detected repository subdirectory '{repo_subdir_name}', using it.")
-            else:
-                logger.error(f"[Repo Job {job_id}] Cloned successfully, but single item '{repo_subdir_name}' is not a directory?")
-                raise FileNotFoundError("Cloned item is not a directory.")
-        elif len(items_in_base_dir) == 0:
-            logger.error(f"[Repo Job {job_id}] Clone directory {job_clone_base_dir} is empty after successful clone command?")
-            raise FileNotFoundError("Cloned directory appears empty.")
-        else:
-            # Handle unusual cases with multiple items
-            logger.warning(f"[Repo Job {job_id}] Multiple items found in clone base directory ({items_in_base_dir}). Attempting to find repo root or using base.")
-            # Attempt heuristic: find the dir containing .git
-            found_repo_dir = None
-            for item in items_in_base_dir:
-                potential_dir = os.path.join(job_clone_base_dir, item)
-                if os.path.isdir(potential_dir) and os.path.exists(os.path.join(potential_dir, '.git')):
-                    found_repo_dir = potential_dir
-                    logger.info(f"[Repo Job {job_id}] Found likely repo dir: '{item}'")
-                    break
-            if found_repo_dir:
-                input_path_for_service = found_repo_dir
-            else:
-                logger.warning(f"[Repo Job {job_id}] Could not definitively identify repo root among multiple items. Using base directory {job_clone_base_dir} - This might be incorrect!")
-                input_path_for_service = job_clone_base_dir
-
-        # Proceed with processing
-        update_job_status(job_id, "processing")
-        logger.info(f"[Repo Job {job_id}] Starting analysis on path: {input_path_for_service}")
+        update_job_status(job_id_str, "processing")
+        logger.info(f"[Repo Job {job_id_str}] Starting analysis on path: {input_path_for_service}")
+        
+        t_analysis_start = time.perf_counter()
         result_content = await run_code2prompt(input_path_for_service)
-        logger.info(f"[Repo Job {job_id}] Analysis finished. Output length: {len(result_content)}")
+        t_analysis_end = time.perf_counter()
+        code_analysis_duration = t_analysis_end - t_analysis_start
+        logger.info(f"[Repo Job {job_id_str}] Analysis finished. Output length: {len(result_content)}")
 
         if result_content.startswith(("# Error:", "# Warning:")):
             first_line = result_content.split('\n', 1)[0]
-            logger.warning(f"[Repo Job {job_id}] code2prompt reported: {first_line}")
+            logger.warning(f"[Repo Job {job_id_str}] code2prompt reported: {first_line}")
             if result_content.startswith("# Error:"):
-                update_job_status(job_id, "failed", error=f"Code analysis failed: {first_line}")
-                return
+                update_job_status(job_id_str, "failed", error=f"Code analysis failed: {first_line}")
+                error_msg_for_analytics = f"Code analysis failed: {first_line}"
+                error_type_for_analytics = "Code2PromptError"
+                raise Exception(error_msg_for_analytics)
 
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        with open(result_file_path, "w", encoding="utf-8") as f:
+        with open(result_file_path_on_disk, "w", encoding="utf-8") as f:
             f.write(result_content)
-        logger.info(f"[Repo Job {job_id}] Output saved to {result_file_path}")
-        update_job_status(job_id, "completed", result_file=result_file_path)
+        output_file_size_capture = os.path.getsize(result_file_path_on_disk)
+        final_status_for_analytics = "completed"
+        update_job_status(job_id_str, "completed", result_file=result_file_path_on_disk)
+        logger.info(f"[Repo Job {job_id_str}] Output saved to {result_file_path_on_disk}")
 
-    except FileNotFoundError as e:
-        logger.error(f"[Repo Job {job_id}] File/Directory error during processing: {e}")
-        update_job_status(job_id, "failed", error=str(e))
     except Exception as e:
-        logger.exception(f"[Repo Job {job_id}] Unexpected error during repo processing: {e}")
-        update_job_status(job_id, "failed", error=f"Unexpected error: {type(e).__name__}")
+        logger.exception(f"[Repo Job {job_id_str}] Error during processing: {e}")
+        if not error_msg_for_analytics:
+            error_msg_for_analytics = str(e)[:500]
+        if not error_type_for_analytics:
+            error_type_for_analytics = type(e).__name__
+        update_job_status(job_id_str, "failed", error=error_msg_for_analytics)
     finally:
-        # Cleanup uses the base directory for the job
-        logger.info(f"[Repo Job {job_id}] Cleaning up base clone directory {job_clone_base_dir}")
-        shutil.rmtree(job_clone_base_dir, ignore_errors=True)
+        overall_task_end_time = time.perf_counter()
+        total_task_duration = overall_task_end_time - overall_task_start_time
+        job_end_timestamp = datetime.datetime.utcnow()
+
+        if not analytics_engine:
+            logger.warning(f"Analytics engine not available for final update of repo job {job_uuid_for_analytics}. Skipping.")
+        else:
+            async with get_analytics_session_context() as analytics_session:
+                if analytics_session:
+                    stmt = select(RepoJobAnalytics).where(RepoJobAnalytics.job_uuid == job_uuid_for_analytics)
+                    result_proxy = await analytics_session.execute(stmt)
+                    record_to_update = result_proxy.scalar_one_or_none()
+                    
+                    if record_to_update:
+                        record_to_update.job_end_time = job_end_timestamp
+                        record_to_update.final_status = final_status_for_analytics
+                        record_to_update.error_message = error_msg_for_analytics
+                        record_to_update.error_type = error_type_for_analytics
+                        record_to_update.output_size_bytes = output_file_size_capture
+                        record_to_update.total_processing_duration_seconds = total_task_duration
+                        
+                        record_to_update.cloned_repo_name = cloned_repo_name_capture
+                        record_to_update.clone_successful = clone_success_flag
+                        record_to_update.cloned_repo_size_bytes = cloned_repo_size_capture
+                        record_to_update.git_clone_duration_seconds = git_clone_duration
+                        record_to_update.code_analysis_duration_seconds = code_analysis_duration
+                        
+                        analytics_session.add(record_to_update)
+                        try:
+                            await analytics_session.commit()
+                            logger.info(f"Final analytics updated for repo job {job_uuid_for_analytics}")
+                        except Exception as e_final_analytics:
+                            logger.error(f"Analytics DB error on final repo job log for {job_uuid_for_analytics}: {e_final_analytics}")
+                            await analytics_session.rollback()
+                    else:
+                        logger.error(f"Analytics record for repo job {job_uuid_for_analytics} not found for final update.")
+                else:
+                    logger.warning(f"Failed to get analytics session for final update of repo job {job_uuid_for_analytics}. Skipping.")
+        
+        if os.path.isdir(job_clone_base_dir):
+            shutil.rmtree(job_clone_base_dir, ignore_errors=True)
 
 # --- MODIFIED: process_website_job ---
-async def process_website_job(job_id: str, website_url: str,
-                            max_depth: Optional[int] = None,
-                            max_pages: Optional[int] = None,
-                            stay_on_domain: Optional[bool] = None,
-                            include_patterns: Optional[str] = None,
-                            exclude_patterns: Optional[str] = None,
-                            keywords: Optional[str] = None):
-    """Crawls a website using crawl4ai with advanced options and saves the result."""
-    # Use .md extension for website results
-    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
+async def process_website_job(
+    job_id_str: str,
+    website_url: str,
+    max_depth: Optional[int],
+    max_pages: Optional[int],
+    stay_on_domain: Optional[bool],
+    include_patterns: Optional[str],
+    exclude_patterns: Optional[str],
+    keywords: Optional[str]
+):
+    job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+    result_file_path_on_disk = os.path.join(RESULTS_DIR, f"{job_id_str}.md")
+
+    overall_task_start_time = time.perf_counter()
+    website_crawl_duration: Optional[float] = None
+    pages_crawled_capture: Optional[int] = 0
+    output_file_size_capture: Optional[int] = None
+    final_status_for_analytics = "failed"
+    error_msg_for_analytics: Optional[str] = None
+    error_type_for_analytics: Optional[str] = None
 
     try:
-        logger.info(f"[Website Job {job_id}] Starting enhanced crawl for: {website_url}")
-        update_job_status(job_id, "crawling")
+        update_job_status(job_id_str, "crawling")
+        logger.info(f"[Website Job {job_id_str}] Status set to crawling. Starting crawl for: {website_url}")
 
-        # Run the crawl4ai service with all options
-        result_content = await run_crawl4ai(
+        t_crawl_start = time.perf_counter()
+        crawl_result_data = await run_crawl4ai(
             url=website_url,
             max_depth=max_depth,
             max_pages=max_pages,
@@ -297,96 +384,251 @@ async def process_website_job(job_id: str, website_url: str,
             exclude_patterns_str=exclude_patterns,
             keywords_str=keywords
         )
-        logger.info(f"[Website Job {job_id}] crawl4ai service finished.")
+        t_crawl_end = time.perf_counter()
+        website_crawl_duration = t_crawl_end - t_crawl_start
 
-        # Check result
+        result_content = crawl_result_data.get("markdown_content", "")
+        pages_crawled_capture = crawl_result_data.get("pages_processed", 0)
+        logger.info(f"[Website Job {job_id_str}] crawl4ai service finished. Pages processed: {pages_crawled_capture}")
+
         if result_content.startswith(("# Error:", "# Warning:")):
             first_line = result_content.split('\n', 1)[0]
-            logger.warning(f"[Website Job {job_id}] crawl4ai service reported: {first_line}")
+            logger.warning(f"[Website Job {job_id_str}] crawl4ai service reported: {first_line}")
             if result_content.startswith("# Error:"):
-                update_job_status(job_id, "failed", error=result_content)
-                return
-
-        # Save result
-        os.makedirs(RESULTS_DIR, exist_ok=True)
-        with open(result_file_path, "w", encoding="utf-8") as f:
-            f.write(result_content)
-        logger.info(f"[Website Job {job_id}] Output saved to {result_file_path}")
-        update_job_status(job_id, "completed", result_file=result_file_path)
+                error_msg_for_analytics = first_line
+                error_type_for_analytics = "CrawlError"
+                update_job_status(job_id_str, "failed", error=error_msg_for_analytics)
+        else:
+            os.makedirs(RESULTS_DIR, exist_ok=True)
+            with open(result_file_path_on_disk, "w", encoding="utf-8") as f:
+                f.write(result_content)
+            output_file_size_capture = os.path.getsize(result_file_path_on_disk)
+            final_status_for_analytics = "completed"
+            update_job_status(job_id_str, "completed", result_file=result_file_path_on_disk)
+            logger.info(f"[Website Job {job_id_str}] Output saved to {result_file_path_on_disk}")
 
     except Exception as e:
-        logger.exception(f"[Website Job {job_id}] Unexpected error in background task: {e}")
-        update_job_status(job_id, "failed", error=f"Unexpected backend task error: {type(e).__name__}")
+        logger.exception(f"[Website Job {job_id_str}] Error during processing: {e}")
+        final_status_for_analytics = "failed"
+        if not error_msg_for_analytics: error_msg_for_analytics = str(e)[:500]
+        if not error_type_for_analytics: error_type_for_analytics = type(e).__name__
+        update_job_status(job_id_str, "failed", error=error_msg_for_analytics)
+    finally:
+        overall_task_end_time = time.perf_counter()
+        total_task_duration = overall_task_end_time - overall_task_start_time
+        job_end_timestamp = datetime.datetime.utcnow()
+
+        if not analytics_engine:
+            logger.warning(f"Analytics engine not available for final update of website job {job_uuid_for_analytics}. Skipping.")
+        else:
+            async with get_analytics_session_context() as analytics_session:
+                if analytics_session:
+                    stmt = select(WebsiteJobAnalytics).where(WebsiteJobAnalytics.job_uuid == job_uuid_for_analytics)
+                    result_proxy = await analytics_session.execute(stmt)
+                    record_to_update = result_proxy.scalar_one_or_none()
+
+                    if record_to_update:
+                        record_to_update.job_end_time = job_end_timestamp
+                        record_to_update.final_status = final_status_for_analytics
+                        record_to_update.error_message = error_msg_for_analytics
+                        record_to_update.error_type = error_type_for_analytics
+                        record_to_update.output_size_bytes = output_file_size_capture
+                        record_to_update.total_processing_duration_seconds = total_task_duration
+                        record_to_update.pages_actually_crawled_count = pages_crawled_capture
+                        record_to_update.website_crawl_duration_seconds = website_crawl_duration
+                        
+                        analytics_session.add(record_to_update)
+                        try:
+                            await analytics_session.commit()
+                            logger.info(f"Final analytics updated for website job {job_uuid_for_analytics}")
+                        except Exception as e_final_analytics:
+                            logger.error(f"Analytics DB error on final website job log for {job_uuid_for_analytics}: {e_final_analytics}")
+                            await analytics_session.rollback()
+                    else:
+                        logger.error(f"Analytics record for website job {job_uuid_for_analytics} not found for final update. If analytics are working, this might be an old log path.")
+                else:
+                    logger.warning(f"Failed to get analytics session for final update of website job {job_uuid_for_analytics}. Skipping.")
 
 # --- File Upload Background Task ---
-async def process_upload(temp_dir: str, job_id: str):
-    """Handles code processing for direct file uploads."""
-    result_file_path = os.path.join(RESULTS_DIR, f"{job_id}.md")
-    input_path_for_service = temp_dir
+async def process_upload(
+    job_id_str: str,
+    upload_dir_path: str,
+    filtered_files_count_from_endpoint: int,
+    upload_size_bytes_from_endpoint: int
+):
+    job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+    result_file_path_on_disk = os.path.join(RESULTS_DIR, f"{job_id_str}.md")
+    
+    overall_task_start_time = time.perf_counter()
+    code_analysis_duration: Optional[float] = None
+    output_file_size_capture: Optional[int] = None
+    final_status_for_analytics = "failed"
+    error_msg_for_analytics: Optional[str] = None
+    error_type_for_analytics: Optional[str] = None
+    input_path_for_service = upload_dir_path
 
     try:
-        if not os.path.isdir(temp_dir):
-            logger.error(f"[Upload Job {job_id}] Initial upload directory {temp_dir} not found.")
-            raise FileNotFoundError(f"Upload directory {temp_dir} missing.")
+        update_job_status(job_id_str, "processing")
 
-        items_in_temp = os.listdir(temp_dir)
-        if len(items_in_temp) == 1:
-            potential_project_dir_path = os.path.join(temp_dir, items_in_temp[0])
-            if os.path.isdir(potential_project_dir_path):
-                input_path_for_service = potential_project_dir_path
-                logger.info(f"[Upload Job {job_id}] Using upload subdirectory: {items_in_temp[0]}")
-        elif len(items_in_temp) == 0:
-            logger.warning(f"[Upload Job {job_id}] Upload directory {temp_dir} is empty.")
-            raise FileNotFoundError("No files found in upload directory.")
+        items_in_temp = os.listdir(upload_dir_path)
+        if len(items_in_temp) == 1 and os.path.isdir(os.path.join(upload_dir_path, items_in_temp[0])):
+            input_path_for_service = os.path.join(upload_dir_path, items_in_temp[0])
+            logger.info(f"[Upload Job {job_id_str}] Using upload subdirectory: {items_in_temp[0]}")
+        elif not items_in_temp and os.path.isdir(upload_dir_path):
+            input_path_for_service = upload_dir_path
+        elif not items_in_temp:
+            logger.warning(f"[Upload Job {job_id_str}] Upload directory {upload_dir_path} appears empty.")
+            error_msg_for_analytics = "Upload directory empty or files not found."
+            error_type_for_analytics = "FileUploadError"
+            raise FileNotFoundError(error_msg_for_analytics)
 
-        update_job_status(job_id, "processing")
+        logger.info(f"[Upload Job {job_id_str}] Starting analysis on path: {input_path_for_service}")
+        t_analysis_start = time.perf_counter()
         result_content = await run_code2prompt(input_path_for_service)
-
+        t_analysis_end = time.perf_counter()
+        code_analysis_duration = t_analysis_end - t_analysis_start
+        
         if result_content.startswith(("# Error:", "# Warning:")):
             first_line = result_content.split('\n', 1)[0]
-            logger.warning(f"[Upload Job {job_id}] code2prompt reported: {first_line}")
+            logger.warning(f"[Upload Job {job_id_str}] code2prompt reported: {first_line}")
             if result_content.startswith("# Error:"):
-                update_job_status(job_id, "failed", error=f"Code analysis failed: {first_line}")
-                return
-            # Continue with warnings
+                update_job_status(job_id_str, "failed", error=f"Code analysis failed: {first_line}")
+                error_msg_for_analytics = f"Code analysis failed: {first_line}"
+                error_type_for_analytics = "Code2PromptError"
+                raise Exception(error_msg_for_analytics)
 
         os.makedirs(RESULTS_DIR, exist_ok=True)
-        with open(result_file_path, "w", encoding="utf-8") as f:
+        with open(result_file_path_on_disk, "w", encoding="utf-8") as f:
             f.write(result_content)
-        logger.info(f"[Upload Job {job_id}] Output saved to {result_file_path}")
-        update_job_status(job_id, "completed", result_file=result_file_path)
+        output_file_size_capture = os.path.getsize(result_file_path_on_disk)
+        final_status_for_analytics = "completed"
+        update_job_status(job_id_str, "completed", result_file=result_file_path_on_disk)
+        logger.info(f"[Upload Job {job_id_str}] Output saved to {result_file_path_on_disk}")
 
-    except FileNotFoundError as e:
-        logger.error(f"[Upload Job {job_id}] File/Directory error: {e}")
-        update_job_status(job_id, "failed", error=str(e))
     except Exception as e:
-        logger.exception(f"[Upload Job {job_id}] Unexpected error: {e}")
-        update_job_status(job_id, "failed", error=f"Unexpected error: {type(e).__name__}")
+        logger.exception(f"[Upload Job {job_id_str}] Error during processing: {e}")
+        if not error_msg_for_analytics:
+            error_msg_for_analytics = str(e)[:500]
+        if not error_type_for_analytics:
+            error_type_for_analytics = type(e).__name__
+        update_job_status(job_id_str, "failed", error=error_msg_for_analytics)
     finally:
-        logger.info(f"[Upload Job {job_id}] Cleaning up upload directory {temp_dir}")
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        overall_task_end_time = time.perf_counter()
+        total_task_duration = overall_task_end_time - overall_task_start_time
+        job_end_timestamp = datetime.datetime.utcnow()
+
+        if not analytics_engine:
+            logger.warning(f"Analytics engine not available for final update of upload job {job_uuid_for_analytics}. Skipping.")
+        else:
+            async with get_analytics_session_context() as analytics_session:
+                if analytics_session:
+                    stmt = select(UploadJobAnalytics).where(UploadJobAnalytics.job_uuid == job_uuid_for_analytics)
+                    result_proxy = await analytics_session.execute(stmt)
+                    record_to_update = result_proxy.scalar_one_or_none()
+                    
+                    if record_to_update:
+                        record_to_update.job_end_time = job_end_timestamp
+                        record_to_update.final_status = final_status_for_analytics
+                        record_to_update.error_message = error_msg_for_analytics
+                        record_to_update.error_type = error_type_for_analytics
+                        record_to_update.output_size_bytes = output_file_size_capture
+                        record_to_update.total_processing_duration_seconds = total_task_duration
+                        
+                        record_to_update.filtered_files_processed_count = filtered_files_count_from_endpoint
+                        record_to_update.upload_folder_size_bytes = upload_size_bytes_from_endpoint
+                        record_to_update.code_analysis_duration_seconds = code_analysis_duration
+                        
+                        analytics_session.add(record_to_update)
+                        try:
+                            await analytics_session.commit()
+                            logger.info(f"Final analytics updated for upload job {job_uuid_for_analytics}")
+                        except Exception as e_final_analytics:
+                            logger.error(f"Analytics DB error on final upload job log for {job_uuid_for_analytics}: {e_final_analytics}")
+                            await analytics_session.rollback()
+                    else:
+                        logger.error(f"Analytics record for upload job {job_uuid_for_analytics} not found for final update.")
+                else:
+                    logger.warning(f"Failed to get analytics session for final update of upload job {job_uuid_for_analytics}. Skipping.")
+        
+        if os.path.isdir(upload_dir_path):
+            shutil.rmtree(upload_dir_path, ignore_errors=True)
 
 # --- API Endpoints ---
 @app.post("/api/process-repo")
-async def process_repo(repo_request: RepoRequest, background_tasks: BackgroundTasks):
-    """Accepts a Git repository URL and starts background processing."""
-    repo_url = repo_request.repo_url.strip()
-    if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', repo_url):
+async def process_repo(
+    repo_request: RepoRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    analytics_session: Optional[AsyncSession] = Depends(get_analytics_session_dependency)
+):
+    repo_url_str = repo_request.repo_url.strip()
+    if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', repo_url_str):
         raise HTTPException(status_code=400, detail="Invalid repository URL format.")
-    job_id = create_job(job_type="repo")  # Changed from "repository" to "repo"
-    background_tasks.add_task(process_repository_job, job_id, repo_url)
-    logger.info(f"Job {job_id}: Background repository processing scheduled for {repo_url}")
-    return {"job_id": job_id}
+    
+    job_id_str = create_job(job_type="repo")
+    
+    if analytics_session:
+        try:
+            job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+            user_ip = http_request.client.host
+            
+            analytics_entry = RepoJobAnalytics(
+                job_uuid=job_uuid_for_analytics,
+                job_start_time=datetime.datetime.utcnow(),
+                user_ip=user_ip,
+                repo_url=repo_url_str
+            )
+            analytics_session.add(analytics_entry)
+            await analytics_session.commit()
+            logger.info(f"Initial analytics record created for repo job {job_uuid_for_analytics}")
+        except Exception as e_analytics:
+            logger.error(f"Analytics DB error on initial repo job log for {job_id_str}: {e_analytics}")
+    else:
+        logger.warning(f"Analytics session not available for repo job {job_id_str}. Skipping initial analytics log.")
+
+    background_tasks.add_task(process_repository_job, job_id_str, repo_url_str)
+    logger.info(f"Job {job_id_str}: Background repository processing scheduled for {repo_url_str}")
+    return {"job_id": job_id_str}
 
 @app.post("/api/process-website")
-async def process_website(website_request: WebsiteRequest, background_tasks: BackgroundTasks):
-    """Accepts a website URL and crawl options, validates them, and starts background crawling."""
-    website_url = str(website_request.website_url)
-    job_id = create_job(job_type="website")  # Explicit job_type parameter
+async def process_website(
+    website_request: WebsiteRequest,
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    analytics_session: Optional[AsyncSession] = Depends(get_analytics_session_dependency)
+):
+    website_url_str = str(website_request.website_url)
+    job_id_str = create_job(job_type="website")
+    
+    if analytics_session:
+        try:
+            job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+            user_ip = http_request.client.host
+            
+            analytics_entry = WebsiteJobAnalytics(
+                job_uuid=job_uuid_for_analytics,
+                job_start_time=datetime.datetime.utcnow(),
+                user_ip=user_ip,
+                website_url=website_url_str,
+                crawl_max_depth_setting=website_request.max_depth,
+                crawl_max_pages_setting=website_request.max_pages,
+                crawl_stay_on_domain_setting=website_request.stay_on_domain,
+                crawl_include_patterns_setting=website_request.include_patterns,
+                crawl_exclude_patterns_setting=website_request.exclude_patterns,
+                crawl_keywords_setting=website_request.keywords
+            )
+            analytics_session.add(analytics_entry)
+            await analytics_session.commit()
+            logger.info(f"Initial analytics record created for website job {job_uuid_for_analytics}")
+        except Exception as e_analytics:
+            logger.error(f"Analytics DB error on initial website job log for {job_id_str}: {e_analytics}")
+    else:
+        logger.warning(f"Analytics session not available for website job {job_id_str}. Skipping initial analytics log.")
+
     background_tasks.add_task(
         process_website_job,
-        job_id=job_id,
-        website_url=website_url,
+        job_id_str=job_id_str,
+        website_url=website_url_str,
         max_depth=website_request.max_depth,
         max_pages=website_request.max_pages,
         stay_on_domain=website_request.stay_on_domain,
@@ -394,62 +636,110 @@ async def process_website(website_request: WebsiteRequest, background_tasks: Bac
         exclude_patterns=website_request.exclude_patterns,
         keywords=website_request.keywords
     )
-    logger.info(f"Job {job_id}: Background website processing scheduled for {website_url}")
-    return {"job_id": job_id}
+    logger.info(f"Job {job_id_str}: Background website processing scheduled for {website_url_str}")
+    return {"job_id": job_id_str}
 
 @app.post("/api/upload-codebase")
-async def upload_codebase(background_tasks: BackgroundTasks, files: List[UploadFile] = File(...)):
-    """Accepts folder uploads, saves files, and starts background processing."""
-    job_id = create_job(job_type="upload")  # Explicit job_type parameter
-    upload_dir = os.path.join(TEMP_DIR, job_id)
+async def upload_codebase(
+    background_tasks: BackgroundTasks,
+    http_request: Request,
+    files: List[UploadFile] = File(...),
+    total_files_selected_by_user: Optional[int] = Form(None),
+    analytics_session: Optional[AsyncSession] = Depends(get_analytics_session_dependency)
+):
+    job_id_str = create_job(job_type="upload")
+    upload_dir = os.path.join(TEMP_DIR, job_id_str)
     os.makedirs(upload_dir, exist_ok=True)
 
+    t_backend_upload_start = time.perf_counter()
     file_count = 0
-    total_size = 0
-    try:
-        update_job_status(job_id, "uploading")
-        logger.info(f"Receiving upload for job {job_id}")
+    total_processed_size_bytes = 0
+    original_folder_name_root_capture = None
 
-        for file in files:
-            relative_path = file.filename
-            if not relative_path:
-                logger.warning(f"Job {job_id}: Skipping file with empty filename.")
-                continue
+    for file_idx, file in enumerate(files):
+        relative_path = file.filename
+        if not relative_path:
+            logger.warning(f"Job {job_id_str}: Skipping file with empty filename.")
+            continue
+        
+        if file_idx == 0 and relative_path:
+            original_folder_name_root_capture = relative_path.split('/')[0] if '/' in relative_path else relative_path
 
-            clean_relative_path = os.path.normpath(relative_path).lstrip('/\\.')
-            if clean_relative_path != relative_path or "/../" in relative_path or "\\..\\" in relative_path:
-                logger.error(f"Job {job_id}: Potentially unsafe path detected, skipping file: {relative_path}")
-                continue
+        clean_relative_path = os.path.normpath(relative_path).lstrip('/\\.')
+        if clean_relative_path != relative_path or "/../" in relative_path or "\\..\\" in relative_path:
+            logger.error(f"Job {job_id_str}: Potentially unsafe path detected, skipping file: {relative_path}")
+            continue
+        
+        full_path = os.path.join(upload_dir, clean_relative_path)
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+        try:
+            with open(full_path, "wb") as f:
+                while content := await file.read(1024 * 1024):
+                    f.write(content)
+                    total_processed_size_bytes += len(content)
+            file_count += 1
+        except Exception as write_error:
+            logger.error(f"Job {job_id_str}: Failed to write file {relative_path}: {write_error}")
+            continue
 
-            full_path = os.path.join(upload_dir, clean_relative_path)
-            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+    t_backend_upload_end = time.perf_counter()
+    backend_upload_handling_duration = t_backend_upload_end - t_backend_upload_start
 
-            try:
-                with open(full_path, "wb") as f:
-                    while content := await file.read(1024 * 1024):
-                        f.write(content)
-                        total_size += len(content)
-                file_count += 1
-            except Exception as write_error:
-                logger.error(f"Job {job_id}: Failed to write file {relative_path}: {write_error}")
-                continue
+    if analytics_session:
+        try:
+            job_uuid_for_analytics = app_uuid.UUID(job_id_str)
+            user_ip = http_request.client.host
 
-        if file_count == 0:
-            logger.warning(f"Job {job_id}: No valid files were uploaded.")
-            update_job_status(job_id, "failed", error="No valid files uploaded.")
-            shutil.rmtree(upload_dir, ignore_errors=True)
-            return {"job_id": job_id}
+            analytics_entry = UploadJobAnalytics(
+                job_uuid=job_uuid_for_analytics,
+                job_start_time=datetime.datetime.utcnow(),
+                user_ip=user_ip,
+                initial_files_selected_count=total_files_selected_by_user,
+                original_folder_name_root=original_folder_name_root_capture,
+                backend_upload_handling_duration_seconds=backend_upload_handling_duration
+            )
+            analytics_session.add(analytics_entry)
+            await analytics_session.commit()
+            logger.info(f"Initial analytics record created for upload job {job_uuid_for_analytics}")
+        except Exception as e_analytics:
+            logger.error(f"Analytics DB error on initial upload job log for {job_id_str}: {e_analytics}")
+    else:
+        logger.warning(f"Analytics session not available for upload job {job_id_str}. Skipping initial analytics log.")
 
-        logger.info(f"Job {job_id}: Received {file_count} files, total size {total_size} bytes.")
-        background_tasks.add_task(process_upload, upload_dir, job_id)
-        return {"job_id": job_id}
+    if file_count == 0:
+        update_job_status(job_id_str, "failed", error="No valid files uploaded.")
+        if analytics_session:
+            async with get_analytics_session_context() as final_session:
+                if final_session:
+                    stmt = select(UploadJobAnalytics).where(UploadJobAnalytics.job_uuid == app_uuid.UUID(job_id_str))
+                    results = await final_session.exec(stmt)
+                    record_to_update = results.one_or_none()
+                    if record_to_update:
+                        record_to_update.job_end_time = datetime.datetime.utcnow()
+                        record_to_update.final_status = "failed"
+                        record_to_update.error_message = "No valid files uploaded."
+                        record_to_update.error_type = "UploadError"
+                        record_to_update.filtered_files_processed_count = 0
+                        record_to_update.upload_folder_size_bytes = 0
+                        final_session.add(record_to_update)
+                        try:
+                            await final_session.commit()
+                        except Exception as e_final_analytics:
+                            logger.error(f"Analytics DB error on failed upload update for {job_id_str}: {e_final_analytics}")
+                            await final_session.rollback()
+        shutil.rmtree(upload_dir, ignore_errors=True)
+        return {"job_id": job_id_str}
 
-    except Exception as e:
-        logger.exception(f"Critical error during file upload for job {job_id}: {e}")
-        update_job_status(job_id, "failed", error=f"Critical upload error: {type(e).__name__}")
-        if os.path.isdir(upload_dir):
-            shutil.rmtree(upload_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="File upload failed critically.") from e
+    update_job_status(job_id_str, "uploading")
+    logger.info(f"Job {job_id_str}: Received {file_count} files, total size {total_processed_size_bytes} bytes.")
+    background_tasks.add_task(
+        process_upload,
+        job_id_str,
+        upload_dir,
+        file_count,
+        total_processed_size_bytes
+    )
+    return {"job_id": job_id_str}
 
 @app.get("/api/job-status/{job_id}")
 async def job_status(job_id: str):

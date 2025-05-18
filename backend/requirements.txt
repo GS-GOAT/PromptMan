@@ -4,3 +4,9 @@ python-multipart==0.0.6
 gunicorn==21.2.0
 redis==5.0.1
 crawl4ai
+
+# New additions for PostgreSQL Analytics
+sqlmodel==0.0.14
+asyncpg==0.29.0
+psycopg2-binary
+alembic==1.13.1
