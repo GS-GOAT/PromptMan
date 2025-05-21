@@ -167,6 +167,8 @@ async def cleanup_middleware(request: Request, call_next):
 # --- Repository Processing ---
 class RepoRequest(BaseModel):
     repo_url: str
+    include_patterns: Optional[str] = None
+    exclude_patterns: Optional[str] = None
 
 # --- MODIFIED: WebsiteRequest Model ---
 class WebsiteRequest(BaseModel):
@@ -216,7 +218,7 @@ def get_dir_size(path='.'):
         logger.warning(f"Permission denied for path: {path}")
     return total
 
-async def process_repository_job(job_id_str: str, repo_url: str):
+async def process_repository_job(job_id_str: str, repo_url: str, include_patterns: Optional[str] = None, exclude_patterns: Optional[str] = None):
     job_uuid_for_analytics = app_uuid.UUID(job_id_str)
     job_clone_base_dir = os.path.join(TEMP_CLONES_DIR, job_id_str)
     result_file_path_on_disk = os.path.join(RESULTS_DIR, f"{job_id_str}.md")
@@ -276,7 +278,11 @@ async def process_repository_job(job_id_str: str, repo_url: str):
         logger.info(f"[Repo Job {job_id_str}] Starting analysis on path: {input_path_for_service}")
         
         t_analysis_start = time.perf_counter()
-        result_content = await run_code2prompt(input_path_for_service)
+        result_content = await run_code2prompt(
+            input_path_for_service,
+            include_patterns=include_patterns,
+            exclude_patterns=exclude_patterns
+        )
         t_analysis_end = time.perf_counter()
         code_analysis_duration = t_analysis_end - t_analysis_start
         logger.info(f"[Repo Job {job_id_str}] Analysis finished. Output length: {len(result_content)}")
@@ -576,7 +582,9 @@ async def process_repo(
                 job_uuid=job_uuid_for_analytics,
                 job_start_time=datetime.datetime.utcnow(),
                 user_ip=user_ip,
-                repo_url=repo_url_str
+                repo_url=repo_url_str,
+                include_patterns=repo_request.include_patterns,
+                exclude_patterns=repo_request.exclude_patterns
             )
             analytics_session.add(analytics_entry)
             await analytics_session.commit()
@@ -586,7 +594,7 @@ async def process_repo(
     else:
         logger.warning(f"Analytics session not available for repo job {job_id_str}. Skipping initial analytics log.")
 
-    background_tasks.add_task(process_repository_job, job_id_str, repo_url_str)
+    background_tasks.add_task(process_repository_job, job_id_str, repo_url_str, repo_request.include_patterns, repo_request.exclude_patterns)
     logger.info(f"Job {job_id_str}: Background repository processing scheduled for {repo_url_str}")
     return {"job_id": job_id_str}
 

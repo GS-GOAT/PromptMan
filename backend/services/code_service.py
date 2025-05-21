@@ -8,6 +8,7 @@ import time
 import tempfile
 import uuid
 import shutil
+from typing import Optional
 
 # --- Logging Setup ---
 logging.basicConfig(level=logging.INFO,
@@ -26,13 +27,18 @@ if not CODE2PROMPT_EXECUTABLE:
 else:
     logger.info(f"Found code2prompt executable at: {CODE2PROMPT_EXECUTABLE}")
 
-def run_code2prompt_sync(directory: str):
+def run_code2prompt_sync(directory: str, include_patterns: Optional[str] = None, exclude_patterns: Optional[str] = None):
     """Synchronous function using the dynamically found executable."""
     if CODE2PROMPT_EXECUTABLE == "__EXECUTABLE_NOT_FOUND__":
         return "# Error: Executable Not Found\n\nCould not find code2prompt executable in PATH."
 
     temp_output_filename = os.path.join(tempfile.gettempdir(), f"code2prompt_{uuid.uuid4()}.md")
     cmd = [CODE2PROMPT_EXECUTABLE, directory, "--output-file", temp_output_filename]
+    
+    if include_patterns:
+        cmd.extend(["--include", include_patterns])
+    if exclude_patterns:
+        cmd.extend(["--exclude", exclude_patterns])
 
     logger.info(f"Executing command synchronously: {' '.join(cmd)}")
     output_content = None
@@ -93,7 +99,7 @@ def run_code2prompt_sync(directory: str):
 
     return output_content
 
-async def run_code2prompt(directory: str):
+async def run_code2prompt(directory: str, include_patterns: Optional[str] = None, exclude_patterns: Optional[str] = None):
     """
     Run Code2Prompt using the dynamically found executable.
     """
@@ -155,7 +161,7 @@ async def run_code2prompt(directory: str):
 
     # --- Execute code2prompt using synchronous call in thread ---
     try:
-        result = await asyncio.to_thread(run_code2prompt_sync, directory)
+        result = await asyncio.to_thread(run_code2prompt_sync, directory, include_patterns, exclude_patterns)
         return result
     except Exception as e:
         logger.error(f"Error executing code2prompt via thread: {e}", exc_info=True)
