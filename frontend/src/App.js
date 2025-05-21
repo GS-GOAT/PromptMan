@@ -37,12 +37,12 @@ const IGNORE_PATH_PATTERNS = new Set([
 ]);
 
 const IGNORE_FILE_PATTERNS = new Set([
-  'package-lock.json', 'yarn.lock', '.gitignore', '.DS_Store'
+  'package-lock.json', 'yarn.lock', '.gitignore', '.DS_Store', 'pnpm-lock.yaml'
 ]);
 
 const IGNORE_EXTENSIONS = new Set([
   '.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib',
-  '.log', '.tmp', '.temp', '.swp'
+  '.log', '.tmp', '.temp', '.swp', '.svg', '.png', '.gif'
 ]);
 
 function App() {
