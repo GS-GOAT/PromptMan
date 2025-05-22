@@ -61,6 +61,7 @@ function App() {
   const fileInputRef = useRef(null);
 
   const [activeInputMode, setActiveInputMode] = useState('upload');
+  const [showRepoOptions, setShowRepoOptions] = useState(false);
 
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [isProcessingWebsite, setIsProcessingWebsite] = useState(false);
@@ -465,6 +466,7 @@ function App() {
     setIsProcessingRepo(false);
     setIsProcessingWebsite(false);
     setActiveInputMode('upload');
+    setShowRepoOptions(false);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
@@ -634,52 +636,66 @@ function App() {
                       )}
                     </button>
                   </div>
-                  <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
-                    <div style={{ flex: 1 }}>
-                      <label htmlFor="repoIncludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                        Include Patterns (comma-separated)
-                      </label>
-                      <input
-                        id="repoIncludePatterns"
-                        type="text"
-                        value={repoIncludePatterns}
-                        onChange={handleRepoIncludePatternsChange}
-                        placeholder="*.py,*.js,*.ts"
-                        disabled={isProcessingRepo || isUploading}
-                        style={{
-                          width: '100%',
-                          padding: '0.6rem 0.8rem',
-                          borderRadius: '6px',
-                          border: '1px solid var(--card-border-color)',
-                          background: 'rgba(var(--card-bg-rgb), 0.8)',
-                          color: 'var(--text-color)',
-                          fontSize: '0.9rem'
-                        }}
-                      />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <label htmlFor="repoExcludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
-                        Exclude Patterns (comma-separated)
-                      </label>
-                      <input
-                        id="repoExcludePatterns"
-                        type="text"
-                        value={repoExcludePatterns}
-                        onChange={handleRepoExcludePatternsChange}
-                        placeholder="node_modules,__pycache__,*.log"
-                        disabled={isProcessingRepo || isUploading}
-                        style={{
-                          width: '100%',
-                          padding: '0.6rem 0.8rem',
-                          borderRadius: '6px',
-                          border: '1px solid var(--card-border-color)',
-                          background: 'rgba(var(--card-bg-rgb), 0.8)',
-                          color: 'var(--text-color)',
-                          fontSize: '0.9rem'
-                        }}
-                      />
-                    </div>
+
+                  {/* Advanced Options Toggle */}
+                  <div style={{ marginBottom: '1rem', borderTop: '1px solid var(--card-border-color)', paddingTop: '1rem' }}>
+                    <button onClick={() => setShowRepoOptions(!showRepoOptions)}
+                            style={{ background: 'none', border: 'none', color: 'var(--primary-color)', cursor: 'pointer', padding: '0.5rem 0', fontSize: '0.9rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                            aria-expanded={showRepoOptions}>
+                      <i className={`fas fa-chevron-${showRepoOptions ? 'down' : 'right'}`}></i>
+                      {showRepoOptions ? 'Hide' : 'Show'} Clone Options
+                    </button>
                   </div>
+
+                  {/* Repo Options Grid */}
+                  {showRepoOptions && (
+                    <div className="crawl-options-grid">
+                      <div style={{ flex: 1, gridColumn: '1 / -1' }}>
+                        <label htmlFor="repoIncludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                          Include Patterns (comma-separated glob patterns)
+                        </label>
+                        <input
+                          id="repoIncludePatterns"
+                          type="text"
+                          value={repoIncludePatterns}
+                          onChange={handleRepoIncludePatternsChange}
+                          placeholder="*.py,*.js,*.ts"
+                          disabled={isProcessingRepo || isUploading}
+                          style={{
+                            width: '100%',
+                            padding: '0.6rem 0.8rem',
+                            borderRadius: '6px',
+                            border: '1px solid var(--card-border-color)',
+                            background: 'rgba(var(--card-bg-rgb), 0.8)',
+                            color: 'var(--text-color)',
+                            fontSize: '0.9rem'
+                          }}
+                        />
+                      </div>
+                      <div style={{ flex: 1, gridColumn: '1 / -1' }}>
+                        <label htmlFor="repoExcludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                          Exclude Patterns (comma-separated glob patterns)
+                        </label>
+                        <input
+                          id="repoExcludePatterns"
+                          type="text"
+                          value={repoExcludePatterns}
+                          onChange={handleRepoExcludePatternsChange}
+                          placeholder="node_modules,__pycache__,*.log"
+                          disabled={isProcessingRepo || isUploading}
+                          style={{
+                            width: '100%',
+                            padding: '0.6rem 0.8rem',
+                            borderRadius: '6px',
+                            border: '1px solid var(--card-border-color)',
+                            background: 'rgba(var(--card-bg-rgb), 0.8)',
+                            color: 'var(--text-color)',
+                            fontSize: '0.9rem'
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 
