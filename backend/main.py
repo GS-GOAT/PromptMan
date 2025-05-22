@@ -239,8 +239,13 @@ async def process_repository_job(job_id_str: str, repo_url: str, include_pattern
         os.makedirs(job_clone_base_dir, exist_ok=True)
         update_job_status(job_id_str, "cloning")
 
+        # Extract repo name from URL
+        repo_name = repo_url.split('/')[-1].replace('.git', '')
+        cloned_repo_name_capture = repo_name
+        repo_clone_dir = os.path.join(job_clone_base_dir, repo_name)
+
         t_clone_start = time.perf_counter()
-        cmd = ['git', 'clone', '--depth', '1', repo_url, '.']
+        cmd = ['git', 'clone', '--depth', '1', repo_url, repo_name]
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -270,9 +275,8 @@ async def process_repository_job(job_id_str: str, repo_url: str, include_pattern
 
         clone_success_flag = True
         logger.info(f"[Repo Job {job_id_str}] Cloning successful.")
-        cloned_repo_name_capture = repo_url.split('/')[-1].replace('.git', '') if repo_url else "cloned_repo"
-        cloned_repo_size_capture = get_dir_size(job_clone_base_dir)
-        input_path_for_service = job_clone_base_dir
+        cloned_repo_size_capture = get_dir_size(repo_clone_dir)
+        input_path_for_service = repo_clone_dir
 
         update_job_status(job_id_str, "processing")
         logger.info(f"[Repo Job {job_id_str}] Starting analysis on path: {input_path_for_service}")

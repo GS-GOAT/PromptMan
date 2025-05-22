@@ -56,6 +56,8 @@ function App() {
   const [isFiltering, setIsFiltering] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [isProcessingRepo, setIsProcessingRepo] = useState(false);
+  const [repoIncludePatterns, setRepoIncludePatterns] = useState('');
+  const [repoExcludePatterns, setRepoExcludePatterns] = useState('');
   const fileInputRef = useRef(null);
 
   const [activeInputMode, setActiveInputMode] = useState('upload');
@@ -288,6 +290,14 @@ function App() {
     setRepoUrl(event.target.value);
   }, []);
 
+  const handleRepoIncludePatternsChange = useCallback((event) => {
+    setRepoIncludePatterns(event.target.value);
+  }, []);
+
+  const handleRepoExcludePatternsChange = useCallback((event) => {
+    setRepoExcludePatterns(event.target.value);
+  }, []);
+
   const handleProcessRepo = useCallback(async () => {
     if (!repoUrl.trim()) {
       setError('Please enter a repository URL.');
@@ -310,7 +320,11 @@ function App() {
       const response = await fetch(`${API_BASE_URL}/api/process-repo`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo_url: repoUrl })
+        body: JSON.stringify({ 
+          repo_url: repoUrl,
+          include_patterns: repoIncludePatterns || undefined,
+          exclude_patterns: repoExcludePatterns || undefined
+        })
       });
 
       if (!response.ok) {
@@ -330,7 +344,7 @@ function App() {
     } finally {
       setIsProcessingRepo(false);
     }
-  }, [repoUrl, handleJobSubmitSuccess, handleJobSubmitError]);
+  }, [repoUrl, repoIncludePatterns, repoExcludePatterns, handleJobSubmitSuccess, handleJobSubmitError]);
 
   const handleWebsiteUrlChange = useCallback((event) => {
     setWebsiteUrl(event.target.value);
@@ -619,6 +633,52 @@ function App() {
                         <><i className="fas fa-cogs"></i> Process URL</>
                       )}
                     </button>
+                  </div>
+                  <div style={{ marginTop: '1rem', display: 'flex', gap: '1rem' }}>
+                    <div style={{ flex: 1 }}>
+                      <label htmlFor="repoIncludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        Include Patterns (comma-separated)
+                      </label>
+                      <input
+                        id="repoIncludePatterns"
+                        type="text"
+                        value={repoIncludePatterns}
+                        onChange={handleRepoIncludePatternsChange}
+                        placeholder="*.py,*.js,*.ts"
+                        disabled={isProcessingRepo || isUploading}
+                        style={{
+                          width: '100%',
+                          padding: '0.6rem 0.8rem',
+                          borderRadius: '6px',
+                          border: '1px solid var(--card-border-color)',
+                          background: 'rgba(var(--card-bg-rgb), 0.8)',
+                          color: 'var(--text-color)',
+                          fontSize: '0.9rem'
+                        }}
+                      />
+                    </div>
+                    <div style={{ flex: 1 }}>
+                      <label htmlFor="repoExcludePatterns" style={{ display: 'block', marginBottom: '0.5rem', fontSize: '0.9rem' }}>
+                        Exclude Patterns (comma-separated)
+                      </label>
+                      <input
+                        id="repoExcludePatterns"
+                        type="text"
+                        value={repoExcludePatterns}
+                        onChange={handleRepoExcludePatternsChange}
+                        placeholder="node_modules,__pycache__,*.log"
+                        disabled={isProcessingRepo || isUploading}
+                        style={{
+                          width: '100%',
+                          padding: '0.6rem 0.8rem',
+                          borderRadius: '6px',
+                          border: '1px solid var(--card-border-color)',
+                          background: 'rgba(var(--card-bg-rgb), 0.8)',
+                          color: 'var(--text-color)',
+                          fontSize: '0.9rem'
+                        }}
+                      />
+                    </div>
                   </div>
                 </>
               )}
