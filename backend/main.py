@@ -20,6 +20,7 @@ from sqlmodel import select
 # Import the services
 from services.code_service import run_code2prompt
 from services.website_service import run_crawl4ai
+from filter_patterns import get_default_exclude_patterns
 
 # Analytics DB imports
 from analytics_db import (
@@ -223,6 +224,12 @@ async def process_repository_job(job_id_str: str, repo_url: str, include_pattern
     job_clone_base_dir = os.path.join(TEMP_CLONES_DIR, job_id_str)
     result_file_path_on_disk = os.path.join(RESULTS_DIR, f"{job_id_str}.md")
     
+    # Get default exclude patterns and combine with user-provided patterns
+    default_exclude_patterns = get_default_exclude_patterns()
+    combined_exclude_patterns = default_exclude_patterns
+    if exclude_patterns:
+        combined_exclude_patterns = f"{default_exclude_patterns},{exclude_patterns}"
+    
     overall_task_start_time = time.perf_counter()
     git_clone_duration: Optional[float] = None
     code_analysis_duration: Optional[float] = None
@@ -285,7 +292,7 @@ async def process_repository_job(job_id_str: str, repo_url: str, include_pattern
         result_content = await run_code2prompt(
             input_path_for_service,
             include_patterns=include_patterns,
-            exclude_patterns=exclude_patterns
+            exclude_patterns=combined_exclude_patterns
         )
         t_analysis_end = time.perf_counter()
         code_analysis_duration = t_analysis_end - t_analysis_start
