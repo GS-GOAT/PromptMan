@@ -1,11 +1,11 @@
 # PromptMan
 
-PromptMan is a web application that converts codebases into comprehensive LLM prompts using the `code2prompt` tool.
+PromptMan is a web application that converts codebases into comprehensive LLM prompts.
 
 ## Features
 
 - Upload a code folder
-- Process it using `code2prompt` via the FastAPI backend
+- Process it via the FastAPI backend
 - Track job status
 - Download the resulting Markdown file
 

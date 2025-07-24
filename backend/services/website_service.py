@@ -3,7 +3,7 @@ import logging
 import traceback
 from typing import Optional, List
 
-# Import necessary crawl4ai components
+# necessary crawl4ai components
 from crawl4ai import (
     AsyncWebCrawler,
     CrawlerRunConfig,
@@ -25,7 +25,7 @@ from crawl4ai.deep_crawling.scorers import (
 
 logger = logging.getLogger(__name__)
 
-# --- Default Values ---
+# Default Values 
 DEFAULT_CRAWL_MAX_DEPTH = 0
 DEFAULT_CRAWL_MAX_PAGES = 5
 DEFAULT_STAY_ON_DOMAIN = True
@@ -53,20 +53,21 @@ async def run_crawl4ai(url: str,
         Dictionary containing:
         - markdown_content: Markdown-formatted content string or error/warning message
         - pages_processed: Number of pages successfully processed
+    Future Work/todo: - 
     """
     logger.info(f"Starting enhanced crawl4ai for {url}")
     output_content = None
     pages_processed = 0
 
     try:
-        # --- Apply Defaults ---
+        # Defaults 
         effective_max_depth = max_depth if max_depth is not None else DEFAULT_CRAWL_MAX_DEPTH
         effective_max_pages = max_pages if max_pages is not None else DEFAULT_CRAWL_MAX_PAGES
         # include_external is the inverse of stay_on_domain
         effective_include_external = not (stay_on_domain if stay_on_domain is not None else DEFAULT_STAY_ON_DOMAIN)
         logger.info(f"Effective crawl params: depth={effective_max_depth}, pages={effective_max_pages}, include_external={effective_include_external}")
 
-        # --- Prepare Filters ---
+        # Prepare Filters 
         filters = []
         if include_patterns_str:
             try:
@@ -90,7 +91,7 @@ async def run_crawl4ai(url: str,
         filter_chain = FilterChain(filters=filters)
         logger.info(f"Created filter chain with {len(filters)} filter(s)")
 
-        # --- Prepare Scorer and Strategy ---
+        # Prepare Scorer and Strategy 
         url_scorer = None
         crawl_strategy_class = BFSDeepCrawlStrategy # Default
 
@@ -108,7 +109,7 @@ async def run_crawl4ai(url: str,
         else:
             logger.info("No keywords provided, using default BFS strategy.")
 
-        # --- Configure Strategy ---
+        # Configure Strategy 
         deep_crawl_strategy = crawl_strategy_class(
             max_depth=effective_max_depth,
             max_pages=effective_max_pages,
@@ -117,7 +118,7 @@ async def run_crawl4ai(url: str,
             filter_chain=filter_chain  # Always pass the FilterChain
         )
 
-        # --- Prepare Crawler Run Configuration ---
+        # Crawler Run Config
         config = CrawlerRunConfig(
             deep_crawl_strategy=deep_crawl_strategy,
             # Using default scraper for better JS handling
@@ -125,12 +126,12 @@ async def run_crawl4ai(url: str,
         )
         logger.info(f"Instantiating crawler for {url} with strategy {type(deep_crawl_strategy).__name__} and config.")
 
-        # --- Execute Crawl ---
+        # Execute Crawl 
         async with AsyncWebCrawler() as crawler:
             # arun returns list[CrawlResult] for deep crawls, or single CrawlResult for shallow
             results_or_result = await crawler.arun(url=url, config=config)
 
-            # --- Process Result ---
+            # Process Result 
             # Handle both single result (shallow crawl, depth=0) and list (deep crawl)
             results_list = []
             if isinstance(results_or_result, list):

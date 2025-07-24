@@ -7,31 +7,27 @@ on:
       - main # Trigger deployment on pushes to the main branch
 
 env:
-  # GCP Settings - Pulled from GitHub Secrets
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GCP_REGION: ${{ secrets.GCP_REGION }}
   ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO }} 
   
   ANALYTICS_DATABASE_URL: ${{ secrets.ANALYTICS_DATABASE_URL }}
-  # Image and Service Naming Conventions
+  # Image and Services
   BACKEND_IMAGE_NAME: promptman-backend
   FRONTEND_IMAGE_NAME: promptman-frontend
   BACKEND_SERVICE_NAME: promptman-backend
   FRONTEND_SERVICE_NAME: promptman-frontend
   
-  # Infrastructure Naming
-  VPC_CONNECTOR_NAME: promptman-connector # Name of your VPC connector in GCP_REGION
+  # Infrastructure 
+  VPC_CONNECTOR_NAME: promptman-connector 
   
-  # Use the commit SHA for unique Docker image tags for traceability
+  # unique Docker image SHA tags
   IMAGE_TAG: ${{ github.sha }}
   
-  # Build region for Cloud Build
-  BUILD_REGION: asia-east1 # Choose an allowed region for Cloud Build execution
+  BUILD_REGION: asia-east1 
 
 jobs:
-  # =======================================================
-  # Job 1: Build images for Backend & Frontend using Google Cloud Build
-  # =======================================================
+  # 1. Build images for Backend & Frontend using Google Cloud Build
   build_and_push_images:
     name: Build & Push Images
     runs-on: ubuntu-latest
@@ -40,7 +36,7 @@ jobs:
     
     # Permissions required for Workload Identity Federation
     permissions:
-      contents: 'read'      # To checkout the repository code
+      contents: 'read'      
       id-token: 'write'   # To allow OIDC token generation for authentication
 
     # Job Outputs - Intended image URIs (reconstructed in deploy jobs)
@@ -64,7 +60,7 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
 
-      # --- Build Backend ---
+      # Build Backend 
       - name: Submit Backend Build & Extract Build ID
         id: submit_backend_build 
         run: |
@@ -137,7 +133,7 @@ jobs:
           echo "Backend build $BUILD_ID succeeded."
           # No output needed from this step for the job
 
-      # --- Build Frontend ---
+      # Build Frontend 
       - name: Submit Frontend Build & Extract Build ID
         id: submit_frontend_build
         run: |
@@ -206,9 +202,7 @@ jobs:
           echo "Frontend build $BUILD_ID succeeded."
           # No image_uri output needed for the job
 
-  # ==========================================
-  # Job 2: Deploy Backend Service to Cloud Run
-  # ==========================================
+  # 2. Deploy Backend Service 
   deploy_backend:
     name: Deploy Backend Service
     runs-on: ubuntu-latest
@@ -263,9 +257,7 @@ jobs:
           echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
           echo "host=$SERVICE_HOST" >> $GITHUB_OUTPUT
 
-  # ==========================================
-  # Job 3: Deploy Frontend Service to Cloud Run
-  # ==========================================
+  # 3. Deploy Frontend Service 
   deploy_frontend:
     name: Deploy Frontend Service
     runs-on: ubuntu-latest

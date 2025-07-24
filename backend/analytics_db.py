@@ -12,7 +12,7 @@ from sqlmodel import SQLModel, Field
 
 logger_analytics = logging.getLogger("analytics_db")
 
-# --- Database URL Configuration ---
+# Database URL Config 
 ANALYTICS_DATABASE_URL = os.getenv("ANALYTICS_DATABASE_URL")
 analytics_engine = None
 
@@ -82,7 +82,7 @@ async def get_analytics_session_dependency() -> AsyncGenerator[Optional[AsyncSes
         if session:
             await session.close()
 
-# --- Table 1: Upload Job Analytics ---
+# 1. Upload Job Analytics 
 class UploadJobAnalytics(SQLModel, table=True): # Inherit directly from SQLModel
     __tablename__ = "upload_job_analytics"
 
@@ -108,7 +108,7 @@ class UploadJobAnalytics(SQLModel, table=True): # Inherit directly from SQLModel
     code_analysis_duration_seconds: Optional[float] = Field(default=None)
 
 
-# --- Table 2: Repo Job Analytics ---
+# 2. Repo Job Analytics 
 class RepoJobAnalytics(SQLModel, table=True): # Inherit directly from SQLModel
     __tablename__ = "repo_job_analytics"
 
@@ -134,7 +134,7 @@ class RepoJobAnalytics(SQLModel, table=True): # Inherit directly from SQLModel
     code_analysis_duration_seconds: Optional[float] = Field(default=None)
 
 
-# --- Table 3: Website Job Analytics ---
+# 3. Website Job Analytics 
 class WebsiteJobAnalytics(SQLModel, table=True): # Inherit directly from SQLModel
     __tablename__ = "website_job_analytics"
 

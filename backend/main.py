@@ -17,18 +17,17 @@ import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import select
 
-# Import the services
 from services.code_service import run_code2prompt
 from services.website_service import run_crawl4ai
 from filter_patterns import get_default_exclude_patterns
 
-# Analytics DB imports
+# Analytics DB 
 from analytics_db import (
     init_analytics_db, get_analytics_session_context, get_analytics_session_dependency, analytics_engine,
     UploadJobAnalytics, RepoJobAnalytics, WebsiteJobAnalytics
 )
 
-# --- Configuration ---
+# Config 
 TEMP_DIR = "temp"
 RESULTS_DIR = "results"
 TEMP_CLONES_DIR = "temp_clones"
@@ -37,15 +36,15 @@ REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 REDIS_PORT = int(os.getenv("REDIS_PORT", 6379))
 JOB_EXPIRY_SECONDS = CLEANUP_AGE_SECONDS + 300
 
-# --- Logging Setup ---
+# Logging Setup 
 logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- FastAPI App Setup ---
+# FastAPI App 
 app = FastAPI(title="PromptMan API")
 
-# --- Redis Connection ---
+# Redis Connection 
 redis_client = None
 try:
     redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
@@ -58,7 +57,7 @@ except Exception as e:
     logger.error(f"Failed to initialize Redis client - {e}")
     redis_client = None
 
-# --- CORS Setup ---
+# CORS 
 allowed_origins_str = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
 ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(',') if origin.strip()]
 
@@ -70,12 +69,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- Directory Creation ---
+# Temp Directory Creation for strorage of Results 
 os.makedirs(TEMP_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(TEMP_CLONES_DIR, exist_ok=True)
 
-# --- Job Management Functions ---
+# Job Management Functions 
 def create_job(job_type: str):
     """Creates a new job, storing its type."""
     if not redis_client:
@@ -137,7 +136,7 @@ def get_job_status(job_id):
             return None
     return None
 
-# --- Cleanup Logic ---
+# Cleanup Logic 
 def cleanup_old_files(directory: str, max_age_seconds: int):
     if not os.path.isdir(directory):
         return
@@ -165,13 +164,13 @@ async def cleanup_middleware(request: Request, call_next):
     response = await call_next(request)
     return response
 
-# --- Repository Processing ---
+# Repository Processing 
 class RepoRequest(BaseModel):
     repo_url: str
     include_patterns: Optional[str] = None
     exclude_patterns: Optional[str] = None
 
-# --- MODIFIED: WebsiteRequest Model ---
+# WebsiteRequest Model 
 class WebsiteRequest(BaseModel):
     website_url: HttpUrl
     max_depth: Optional[int] = Field(None, ge=0, le=10, description="Max crawl depth (0=start page only)")
@@ -188,7 +187,6 @@ async def on_startup():
     else:
         logger.warning("Analytics database URL not configured or engine creation failed. Analytics features will be disabled.")
     
-    # Your existing Redis client initialization
     global redis_client
     try:
         redis_client = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, db=0, decode_responses=True)
@@ -365,7 +363,7 @@ async def process_repository_job(job_id_str: str, repo_url: str, include_pattern
         if os.path.isdir(job_clone_base_dir):
             shutil.rmtree(job_clone_base_dir, ignore_errors=True)
 
-# --- MODIFIED: process_website_job ---
+# process_website_job 
 async def process_website_job(
     job_id_str: str,
     website_url: str,
@@ -466,7 +464,7 @@ async def process_website_job(
                 else:
                     logger.warning(f"Failed to get analytics session for final update of website job {job_uuid_for_analytics}. Skipping.")
 
-# --- File Upload Background Task ---
+# File Upload Background Task 
 async def process_upload(
     job_id_str: str,
     upload_dir_path: str,
@@ -570,7 +568,7 @@ async def process_upload(
         if os.path.isdir(upload_dir_path):
             shutil.rmtree(upload_dir_path, ignore_errors=True)
 
-# --- API Endpoints ---
+# API Endpoints 
 @app.post("/api/process-repo")
 async def process_repo(
     repo_request: RepoRequest,

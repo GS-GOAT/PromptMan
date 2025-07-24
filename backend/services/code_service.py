@@ -10,15 +10,15 @@ import uuid
 import shutil
 from typing import Optional
 
-# --- Logging Setup ---
+# Logging Setup 
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
+# Config
 CODE2PROMPT_TIMEOUT_SECONDS = 300  # 5 minutes
 
-# --- Find code2prompt Executable ---
+# code2prompt Executable 
 CODE2PROMPT_EXECUTABLE = shutil.which("code2prompt")
 
 if not CODE2PROMPT_EXECUTABLE:
@@ -105,7 +105,7 @@ async def run_code2prompt(directory: str, include_patterns: Optional[str] = None
     """
     logger.info(f"Starting 'at once' code analysis for directory: {directory}")
 
-    # --- Basic Input Validation ---
+    # Basic Input Validation 
     if not os.path.isdir(directory):
         logger.error(f"Directory does not exist or is not a directory: {directory}")
         return f"# Error: Input Path Not Found\n\nThe specified path `{directory}` does not exist or is not a directory."
@@ -116,7 +116,6 @@ async def run_code2prompt(directory: str, include_patterns: Optional[str] = None
         logger.warning(f"Input directory {directory} is empty or contains no files.")
         return f"# Warning: No Files to Analyze\n\nThe directory `{directory}` contains no files to analyze."
 
-    # --- Check code2prompt Availability ---
     try:
         if CODE2PROMPT_EXECUTABLE == "__EXECUTABLE_NOT_FOUND__":
             raise FileNotFoundError("code2prompt executable not found in PATH.")
@@ -159,7 +158,7 @@ async def run_code2prompt(directory: str, include_patterns: Optional[str] = None
         logger.error(f"Error checking code2prompt at {CODE2PROMPT_EXECUTABLE}: {e}", exc_info=True)
         pass  # Allow execution to continue, run_code2prompt_sync will handle errors
 
-    # --- Execute code2prompt using synchronous call in thread ---
+    # Execute code2prompt using synchronous call in thread 
     try:
         result = await asyncio.to_thread(run_code2prompt_sync, directory, include_patterns, exclude_patterns)
         return result
