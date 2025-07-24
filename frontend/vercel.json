@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://promptman-backend-516311034753.asia-south1.run.app/:path*"
+    }
+  ]
+}
