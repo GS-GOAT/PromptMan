@@ -160,4 +160,4 @@ For production deployment:
 
 ## License
 
-[Your license here]
+MIT
