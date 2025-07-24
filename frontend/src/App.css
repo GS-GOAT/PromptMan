@@ -66,7 +66,7 @@ body::before {
   background-size: 40px 40px;
   animation: backgroundGrid 8s linear infinite;
   z-index: -1;
-  opacity: 0.5;
+  opacity: 0.75;
 }
 
 /* Layout & Header */
@@ -492,7 +492,7 @@ body::before {
   font-family: monospace;
 }
 
-/* --- Tab Styles --- */
+/* Tab Styles */
 .input-mode-tabs {
   display: flex;
   border-bottom: 1px solid var(--card-border-color);
@@ -548,18 +548,73 @@ body::before {
   position: relative;
 }
 
+/* File Upload Loading Animation */
 .filtering-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  border-radius: 0 0 10px 10px;
-  background: rgba(var(--card-bg-rgb), 0.9);
+  background: rgba(var(--card-bg-rgb), 0.95);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10;
+  border-radius: 8px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.filtering-content {
+  text-align: center;
+  color: var(--text-color);
+  animation: slideUp 0.3s ease-out;
+}
+
+@keyframes slideUp {
+  from {
+    transform: translateY(10px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.filtering-spinner {
+  width: 50px;
+  height: 50px;
+  margin: 0 auto 1rem;
+  border: 3px solid rgba(var(--card-bg-rgb), 0.3);
+  border-radius: 50%;
+  border-top-color: var(--primary-color);
+  animation: spin 1s ease-in-out infinite;
+  box-shadow: 0 0 15px var(--card-glow);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.filtering-content p {
+  font-size: 1rem;
+  margin: 0;
+  color: var(--text-color);
+  font-weight: 500;
+  text-shadow: 0 0 10px var(--card-glow);
 }
 
 /* Responsive adjustments for tabs */
@@ -598,7 +653,7 @@ body::before {
   animation: crawl 2s ease-in-out infinite;
 }
 
-/* --- Crawl Options --- */
+/* Crawl Options  */
 .crawl-options-grid {
   border-left: 3px solid var(--primary-color);
   padding-left: 1.5rem;
@@ -701,4 +756,33 @@ button[aria-expanded] i {
 
 button[aria-expanded="true"] i {
   transform: rotate(90deg);
+}
+
+/* LLM Buttons Styles */
+.llm-buttons-container {
+  width: 100%;
+  padding: 0.5rem;
+  background: rgba(var(--card-bg-rgb), 0.5);
+  border-radius: 8px;
+  border: 1px solid var(--card-border-color);
+}
+
+.llm-buttons-container .btn-secondary {
+  background: var(--card-bg-rgb);
+  color: var(--text-color);
+  border: 1px solid var(--card-border-color);
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+  transition: all 0.2s ease;
+}
+
+.llm-buttons-container .btn-secondary:hover {
+  background: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+  transform: translateY(-1px);
+}
+
+.llm-buttons-container .btn-secondary i {
+  margin-right: 0.5rem;
 }

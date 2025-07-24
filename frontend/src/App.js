@@ -25,24 +25,39 @@ const sendGAEvent = (category, action, label = null, value = null) => {
   }
 };
 
-// --- Default Values ---
+// Defaults 
 const DEFAULT_CRAWL_MAX_DEPTH = 0;
 const DEFAULT_CRAWL_MAX_PAGES = 5;
 const DEFAULT_CRAWL_STAY_ON_DOMAIN = true;
 
-// Keep existing ignore patterns
+// existing ignore patterns
 const IGNORE_PATH_PATTERNS = new Set([
   'node_modules', '.git', '__pycache__', '.pytest_cache',
-  'venv', 'env', '.env', '.venv', '.idea', '.vscode'
+  'venv', 'env', '.env', '.venv', '.idea', '.vscode',
+  'build', 'dist', 'target', 'out', 'bin', 'release', 'debug', '__deploy__',
+  '_build', 'site', 'public',
+  'vendor', 'deps', 'Pods', 'Carthage', 'packages',
+  '.history', '.metals', '.bsp'
 ]);
 
 const IGNORE_FILE_PATTERNS = new Set([
-  'package-lock.json', 'yarn.lock', '.gitignore', '.DS_Store', 'pnpm-lock.yaml'
+  'package-lock.json', 'yarn.lock', '.gitignore', '.DS_Store', 'pnpm-lock.yaml',
+  'Thumbs.db'
 ]);
 
 const IGNORE_EXTENSIONS = new Set([
   '.pyc', '.pyo', '.pyd', '.so', '.dll', '.dylib',
-  '.log', '.tmp', '.temp', '.swp', '.svg', '.png', '.gif'
+  '.log', '.tmp', '.temp', '.swp', '.svg', 
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', 
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', 
+  '.zip', '.tar.gz', '.rar', '.gz', '.bz2', '.7z', '.iso', '.dmg', '.pkg', '.deb', '.rpm', 
+  '.mp3', '.wav', '.ogg', '.mp4', '.mov', '.avi', '.mkv', '.webm', 
+  '.pkl', '.parquet', '.hdf5', '.feather', '.arrow', '.csv', '.json', '.xml', '.sqlite', '.db', 
+  '.pt', '.pth', '.pb', '.tflite', '.onnx', '.h5', '.keras', 
+  '.stl', '.obj', '.fbx', '.dae', '.blend', '.dwg', '.dxf', '.step', '.iges', 
+  '.ttf', '.otf', '.woff', '.woff2', '.eot', 
+  '.o', 
+  '.class', '.jar', '.war', '.ear' 
 ]);
 
 function App() {
@@ -54,6 +69,7 @@ function App() {
   const [jobStatus, setJobStatus] = useState(null);
   const [error, setError] = useState(null);
   const [isFiltering, setIsFiltering] = useState(false);
+  const [isFileSelecting, setIsFileSelecting] = useState(false);
   const [repoUrl, setRepoUrl] = useState('');
   const [isProcessingRepo, setIsProcessingRepo] = useState(false);
   const [repoIncludePatterns, setRepoIncludePatterns] = useState('');
@@ -66,7 +82,7 @@ function App() {
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [isProcessingWebsite, setIsProcessingWebsite] = useState(false);
 
-  // --- NEW: Crawl Options State ---
+  // Crawl Options State 
   const [crawlMaxDepth, setCrawlMaxDepth] = useState(DEFAULT_CRAWL_MAX_DEPTH);
   const [crawlMaxPages, setCrawlMaxPages] = useState(DEFAULT_CRAWL_MAX_PAGES);
   const [crawlStayOnDomain, setCrawlStayOnDomain] = useState(DEFAULT_CRAWL_STAY_ON_DOMAIN);
@@ -78,7 +94,7 @@ function App() {
   const STATUS_POLL_INTERVAL = 2000;
   const STATUS_POLL_MAX_TIME = 30 * 60 * 1000;
 
-  // --- Common Job Handlers ---
+  // Common Job Handlers 
   const handleJobSubmitError = useCallback((error, jobType, input = '') => {
     console.error(`Error processing ${jobType}:`, error);
     setError(error.message);
@@ -91,7 +107,7 @@ function App() {
     sendGAEvent('Job Submit', 'Success', jobType);
   }, []);
 
-  // --- Status Polling Effect ---
+  // Status Polling Effect
   useEffect(() => {
     let intervalId = null;
     let startTime = 0;
@@ -156,7 +172,7 @@ function App() {
     };
   }, [jobId]);
 
-  // --- File Handling Functions ---
+  // File Handling Functions 
   const filterIgnoredFiles = useCallback((fileList) => {
     const allFiles = Array.from(fileList);
     setTotalFilesSelected(allFiles.length);
@@ -182,25 +198,38 @@ function App() {
     return filtered;
   }, []);
 
+  const handleBrowseClick = useCallback(() => {
+    if (fileInputRef.current) {
+      setIsFileSelecting(true);
+      fileInputRef.current.click();
+    }
+  }, []);
+
   const handleFileSelect = useCallback((event) => {
     const fileList = event.target.files || [];
-    if (fileList.length === 0) return;
+    if (fileList.length === 0) {
+      setIsFileSelecting(false);
+      return;
+    }
     
     sendGAEvent('User Interaction', 'Select Files', 'upload', fileList.length);
     setIsFiltering(true);
     setError(null);
     setFilesToUpload([]);
     setTotalFilesSelected(0);
+    
+    // Add a small delay to ensure the loading state is visible
     setTimeout(() => {
       const filteredFiles = filterIgnoredFiles(fileList);
       setFilesToUpload(filteredFiles);
       setIsFiltering(false);
+      setIsFileSelecting(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
       
       if (filteredFiles.length === 0) {
         sendGAEvent('User Interaction', 'No Valid Files', 'upload', fileList.length);
       }
-    }, 0);
+    }, 500);
   }, [filterIgnoredFiles]);
 
   const handleDragOver = useCallback((event) => {
@@ -222,6 +251,7 @@ function App() {
     setError(null);
     setFilesToUpload([]);
     setTotalFilesSelected(0);
+    setIsFileSelecting(true);
     const items = event.dataTransfer.items;
     const files = event.dataTransfer.files;
     if (items && items.length > 0) {
@@ -230,19 +260,18 @@ function App() {
         const filteredFiles = filterIgnoredFiles(files);
         setFilesToUpload(filteredFiles);
         setIsFiltering(false);
-      }, 0);
+        setIsFileSelecting(false);
+      }, 500);
+    } else {
+      setIsFileSelecting(false);
     }
   }, [filterIgnoredFiles]);
-
-  const handleBrowseClick = useCallback(() => {
-    if (fileInputRef.current) fileInputRef.current.click();
-  }, []);
 
   const handleRemoveFile = useCallback((indexToRemove) => {
     setFilesToUpload(prevFiles => prevFiles.filter((_, index) => index !== indexToRemove));
   }, []);
 
-  // --- Upload and Repository Processing ---
+  // Upload and Repository Processing 
   const handleUpload = useCallback(async () => {
     if (filesToUpload.length === 0) {
       setError('No relevant files selected after filtering.');
@@ -432,7 +461,7 @@ function App() {
       crawlIncludePatterns, crawlExcludePatterns, crawlKeywords,
       handleJobSubmitSuccess, handleJobSubmitError]);
 
-  // --- Result Handling ---
+  // Result Handling 
   const handleDownload = useCallback(() => {
     if (!jobId || !jobStatus || jobStatus.status !== 'completed') return;
     
@@ -442,7 +471,16 @@ function App() {
     window.location.href = `${API_BASE_URL}/api/download/${jobId}`;
   }, [jobId, jobStatus]);
 
-  // --- Updated Reset Handler ---
+  const handleOpenLLM = useCallback((llmUrl) => {
+    if (!jobId || !jobStatus || jobStatus.status !== 'completed') return;
+    
+    const jobType = jobStatus.type || 'unknown';
+    sendGAEvent('User Interaction', 'Open LLM Interface', `${jobType} - ${llmUrl}`);
+    
+    window.open(llmUrl, '_blank');
+  }, [jobId, jobStatus]);
+
+  // Updated Reset Handler
   const handleReset = useCallback(() => {
     sendGAEvent('User Interaction', 'Reset Form');
     
@@ -520,6 +558,7 @@ function App() {
                     role="button"
                     tabIndex="0"
                     aria-label="Drop code folder here or click to browse"
+                    style={{ position: 'relative' }}
                   >
                     <div className="drop-zone-content">
                       <i className="fas fa-folder-open drop-zone-icon"></i>
@@ -539,16 +578,17 @@ function App() {
                       multiple
                       disabled={isUploading || isProcessingRepo}
                     />
-                  </div>
-                  {isFiltering && (
-                    <div className="filtering-overlay">
-                      <div className="filtering-content">
-                        <div className="filtering-spinner"></div>
-                        <p>Filtering files...</p>
+                    {(isFiltering || isFileSelecting) && (
+                      <div className="filtering-overlay">
+                        <div className="filtering-content">
+                          <div className="filtering-spinner"></div>
+                          <p>{isFileSelecting ? 'Selecting files...' : 'Filtering files...'}</p>
+                        </div>
                       </div>
-                    </div>
-                  )}
-                  {totalFilesSelected > 0 && !isFiltering && (
+                    )}
+                  </div>
+                  
+                  {totalFilesSelected > 0 && !isFiltering && !isFileSelecting && (
                     <>
                       <div className="files-list">
                         <p className="files-list-header">
@@ -862,6 +902,30 @@ function App() {
                   <button className="btn" onClick={handleReset} style={{ background: 'var(--card-border-color)', color: 'var(--text-muted)' }}>
                     <i className="fas fa-redo-alt"></i> Start New Job
                   </button>
+                )}
+                {jobStatus?.status === 'completed' && (
+                  <>
+                    <div className="llm-buttons-container" style={{ marginTop: '1rem', display: 'flex', flexWrap: 'wrap', gap: '0.5rem', justifyContent: 'center' }}>
+                      <button className="btn btn-secondary" onClick={() => handleOpenLLM('https://chat.openai.com')}>
+                        <i className="fas fa-comment"></i> Open in ChatGPT
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => handleOpenLLM('https://gemini.google.com')}>
+                        <i className="fas fa-robot"></i> Open in Gemini
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => handleOpenLLM('https://www.quicke.in')}>
+                        <i className="fas fa-rocket"></i> Open in Quicke
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => handleOpenLLM('https://claude.ai')}>
+                        <i className="fas fa-brain"></i> Open in Claude
+                      </button>
+                      <button className="btn btn-secondary" onClick={() => handleOpenLLM('https://grok.com')}>
+                        <i className="fas fa-bolt"></i> Open in Grok
+                      </button>
+                    </div>
+                    <div style={{ marginTop: '0.5rem', fontSize: '0.9rem', color: 'var(--text-muted)', textAlign: 'center' }}>
+                      <i className="fas fa-info-circle"></i> Download the file first, then upload it to your preferred LLM interface
+                    </div>
+                  </>
                 )}
               </div>
             </div>
