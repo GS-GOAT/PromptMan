@@ -1,53 +1,50 @@
 # PromptMan/.github/workflows/main.yml
-name: PromptMan CI/CD to Google Cloud Run
+name: PromptMan Backend CI/CD to Google Cloud Run
 
 on:
   push:
     branches:
-      - main # Trigger deployment on pushes to the main branch
+      - main 
+    # triggers
+    paths:
+      - 'backend/**'
+      - '.github/workflows/main.yml'
+  
+  workflow_dispatch:
 
 env:
   GCP_PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
-  GCP_REGION: ${{ secrets.GCP_REGION }}
-  ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO }} 
+  GCP_REGION: asia-south1
+  ARTIFACT_REGISTRY_REPO: ${{ secrets.ARTIFACT_REGISTRY_REPO }}
   
-  ANALYTICS_DATABASE_URL: ${{ secrets.ANALYTICS_DATABASE_URL }}
-  # Image and Services
+  # Names
   BACKEND_IMAGE_NAME: promptman-backend
-  FRONTEND_IMAGE_NAME: promptman-frontend
   BACKEND_SERVICE_NAME: promptman-backend
-  FRONTEND_SERVICE_NAME: promptman-frontend
-  
-  # Infrastructure 
-  VPC_CONNECTOR_NAME: promptman-connector 
-  
-  # unique Docker image SHA tags
+
+  # Use unique Docker image SHA tag for traceability
   IMAGE_TAG: ${{ github.sha }}
   
-  BUILD_REGION: asia-east1 
+  BUILD_REGION: asia-east1
 
 jobs:
-  # 1. Build images for Backend & Frontend using Google Cloud Build
-  build_and_push_images:
-    name: Build & Push Images
+  # builder
+  build_backend_image:
+    name: Build & Push Backend Image
     runs-on: ubuntu-latest
-    # This job runs only on pushes to the main branch
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' 
     
-    # Permissions required for Workload Identity Federation
     permissions:
-      contents: 'read'      
-      id-token: 'write'   # To allow OIDC token generation for authentication
+      contents: 'read'
+      id-token: 'write'
 
-    # Job Outputs - Intended image URIs (reconstructed in deploy jobs)
-    # No outputs needed here anymore as deploy jobs reconstruct the URI
-    
+    outputs:
+      image_uri: ${{ steps.submit_backend_build.outputs.image_uri }}
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud (via Workload Identity Federation)
-        id: auth # Give step an ID if needed for other purposes
+      - name: Authenticate to Google Cloud
+        id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
@@ -56,176 +53,46 @@ jobs:
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      # Configure Docker helper to authenticate with Artifact Registry
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-
-      # Build Backend 
-      - name: Submit Backend Build & Extract Build ID
-        id: submit_backend_build 
+      - name: Submit Backend Build using Cloud Build
+        id: submit_backend_build
         run: |
           TARGET_IMAGE_URI="${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
           echo "Submitting Backend Build for Image: $TARGET_IMAGE_URI"
           
-          # Capture all output from gcloud submit
-          GCLOUD_RAW_OUTPUT=$(gcloud builds submit ./backend \
+          gcloud builds submit ./backend \
             --tag "$TARGET_IMAGE_URI" \
             --project=${{ env.GCP_PROJECT_ID }} \
             --region=${{ env.BUILD_REGION }} \
-            --quiet \
-            --format='value(id)') # Attempt to get only ID
+            --quiet
             
-          echo "Raw gcloud submit output (Backend):"
-          echo "$GCLOUD_RAW_OUTPUT" # Log for debugging
-          
-          # Attempt extraction using sed based on observed "starting build..." format
-          BUILD_ID=$(echo "$GCLOUD_RAW_OUTPUT" | sed -n 's/^.*starting build "\(.*\)".*$/\1/p')
+          echo "image_uri=$TARGET_IMAGE_URI" >> $GITHUB_OUTPUT
 
-          # Fallback 1: Direct UUID grep if sed failed
-          if [ -z "$BUILD_ID" ]; then
-            echo "::warning::Could not extract BUILD_ID using 'sed' pattern. Trying direct UUID grep."
-            BUILD_ID=$(echo "$GCLOUD_RAW_OUTPUT" | grep -o -E '[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}' | head -n 1)
-          fi
-          
-          # Fallback 2: gcloud builds list if other methods failed
-          if [ -z "$BUILD_ID" ]; then
-            echo "::warning::Could not extract BUILD_ID using primary methods. Output was: [$GCLOUD_RAW_OUTPUT]. Attempting final gcloud list fallback."
-            BUILD_ID_FALLBACK=$(gcloud builds list --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} --filter="sourceProvenance.resolvedRepoSource.commitSha='${{ github.sha }}' AND buildTriggerId=''" --sort-by=~createTime --format='value(id)' --limit=1)
-            if [ -z "$BUILD_ID_FALLBACK" ]; then
-               echo "::error::Could not determine BUILD_ID even via fallback list command (Backend)."
-               exit 1
-            else
-               BUILD_ID=$(echo "$BUILD_ID_FALLBACK" | xargs) # Clean fallback ID
-               echo "Using BUILD_ID from gcloud list fallback (Backend): $BUILD_ID"
-            fi
-          fi
-
-          # Final check
-          if [ -z "$BUILD_ID" ]; then
-            echo "::error::Failed to obtain a valid BUILD_ID for Backend after all methods."
-            exit 1
-          fi
-
-          echo "Final Extracted Cloud Build ID (Backend): $BUILD_ID" 
-          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT 
-          # No image_uri output needed for the job level
-
-      - name: Wait for Backend Build
-        id: wait_for_backend_build 
-        run: |
-          BUILD_ID="${{ steps.submit_backend_build.outputs.build_id }}"
-          echo "Waiting for Backend Build ID: $BUILD_ID to complete..."
-          
-          STATUS="UNKNOWN"; ELAPSED_TIME=0; TIMEOUT_SECONDS=900; INTERVAL_SECONDS=15 # 15 min timeout
-          while [[ "$STATUS" != "SUCCESS" && "$STATUS" != "FAILURE" && "$STATUS" != "CANCELLED" && "$STATUS" != "TIMEOUT" && "$STATUS" != "INTERNAL_ERROR" ]]; do
-            if [ "$ELAPSED_TIME" -ge "$TIMEOUT_SECONDS" ]; then echo "::error::Timeout waiting for Backend build $BUILD_ID."; exit 1; fi
-            sleep $INTERVAL_SECONDS; ELAPSED_TIME=$((ELAPSED_TIME + INTERVAL_SECONDS))
-            STATUS=$(gcloud builds describe "$BUILD_ID" --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} --format='value(status)' 2>/dev/null || echo "QUERY_FAILED")
-            if [ "$STATUS" == "QUERY_FAILED" ]; then echo "::warning::Failed to query status for build $BUILD_ID, retrying..."; STATUS="UNKNOWN"; continue; fi
-            echo "Backend Build Status ($BUILD_ID): $STATUS (Elapsed: ${ELAPSED_TIME}s)"
-          done
-
-          if [ "$STATUS" != "SUCCESS" ]; then 
-            echo "::error::Backend build $BUILD_ID failed with status $STATUS"; 
-            gcloud builds log "$BUILD_ID" --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} || echo "Log retrieval for failed backend build failed."
-            exit 1; 
-          fi
-          echo "Backend build $BUILD_ID succeeded."
-          # No output needed from this step for the job
-
-      # Build Frontend 
-      - name: Submit Frontend Build & Extract Build ID
-        id: submit_frontend_build
-        run: |
-          TARGET_IMAGE_URI="${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
-          echo "Submitting Frontend Build for Image: $TARGET_IMAGE_URI"
-
-          GCLOUD_RAW_OUTPUT=$(gcloud builds submit ./frontend \
-            --config=frontend/cloudbuild.yaml \
-            --substitutions=_REACT_APP_GA_MEASUREMENT_ID="${{ secrets.PROD_REACT_APP_GA_MEASUREMENT_ID }}",_IMAGE_TAG_NAME="$TARGET_IMAGE_URI" \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --region=${{ env.BUILD_REGION }} \
-            --quiet \
-            --format='value(id)')
-            
-          echo "Raw gcloud submit output (Frontend):"
-          echo "$GCLOUD_RAW_OUTPUT"
-
-          BUILD_ID=$(echo "$GCLOUD_RAW_OUTPUT" | sed -n 's/^.*starting build "\(.*\)".*$/\1/p')
-
-          if [ -z "$BUILD_ID" ]; then
-            echo "::warning::Could not extract BUILD_ID using 'sed' pattern. Trying direct UUID grep."
-            BUILD_ID=$(echo "$GCLOUD_RAW_OUTPUT" | grep -o -E '[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}' | head -n 1)
-          fi
-          
-          if [ -z "$BUILD_ID" ]; then
-            echo "::warning::Could not extract BUILD_ID using primary methods. Output was: [$GCLOUD_RAW_OUTPUT]. Attempting final gcloud list fallback."
-            BUILD_ID_FALLBACK=$(gcloud builds list --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} --filter="sourceProvenance.resolvedRepoSource.commitSha='${{ github.sha }}' AND substitutions._IMAGE_TAG_NAME='$TARGET_IMAGE_URI' AND buildTriggerId=''" --sort-by=~createTime --format='value(id)' --limit=1)
-            if [ -z "$BUILD_ID_FALLBACK" ]; then
-               echo "::error::Could not determine BUILD_ID even via fallback list command (Frontend)."
-               exit 1
-            else
-               BUILD_ID=$(echo "$BUILD_ID_FALLBACK" | xargs)
-               echo "Using BUILD_ID from gcloud list fallback (Frontend): $BUILD_ID"
-            fi
-          fi
-          
-          if [ -z "$BUILD_ID" ]; then
-            echo "::error::Failed to obtain a valid BUILD_ID for Frontend."
-            exit 1
-          fi
-
-          echo "Final Extracted Cloud Build ID (Frontend): $BUILD_ID" 
-          echo "build_id=$BUILD_ID" >> $GITHUB_OUTPUT
-          # No image_uri output needed for the job level
-
-      - name: Wait for Frontend Build
-        id: wait_for_frontend_build
-        run: |
-          BUILD_ID="${{ steps.submit_frontend_build.outputs.build_id }}"
-          echo "Waiting for Frontend Build ID: $BUILD_ID to complete..."
-          
-          STATUS="UNKNOWN"; ELAPSED_TIME=0; TIMEOUT_SECONDS=600; INTERVAL_SECONDS=15 # 10 min timeout
-          while [[ "$STATUS" != "SUCCESS" && "$STATUS" != "FAILURE" && "$STATUS" != "CANCELLED" && "$STATUS" != "TIMEOUT" && "$STATUS" != "INTERNAL_ERROR" ]]; do
-            if [ "$ELAPSED_TIME" -ge "$TIMEOUT_SECONDS" ]; then echo "::error::Timeout waiting for Frontend build $BUILD_ID."; exit 1; fi
-            sleep $INTERVAL_SECONDS; ELAPSED_TIME=$((ELAPSED_TIME + INTERVAL_SECONDS))
-            STATUS=$(gcloud builds describe "$BUILD_ID" --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} --format='value(status)' 2>/dev/null || echo "QUERY_FAILED")
-            if [ "$STATUS" == "QUERY_FAILED" ]; then echo "::warning::Failed to query status for build $BUILD_ID, retrying..."; STATUS="UNKNOWN"; continue; fi
-            echo "Frontend Build Status ($BUILD_ID): $STATUS (Elapsed: ${ELAPSED_TIME}s)"
-          done
-
-          if [ "$STATUS" != "SUCCESS" ]; then 
-            echo "::error::Frontend build $BUILD_ID failed with status $STATUS"; 
-            gcloud builds log "$BUILD_ID" --project=${{ env.GCP_PROJECT_ID }} --region=${{ env.BUILD_REGION }} || echo "Log retrieval for failed frontend build failed."
-            exit 1; 
-          fi
-          echo "Frontend build $BUILD_ID succeeded."
-          # No image_uri output needed for the job
-
-  # 2. Deploy Backend Service 
+  # deployer
   deploy_backend:
     name: Deploy Backend Service
     runs-on: ubuntu-latest
-    # Depends only on the build job confirming success
-    needs: build_and_push_images 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions: {contents: 'read', id-token: 'write'}
-    outputs: # Still needs to output URL/Host for the frontend job
-       backend_url: ${{ steps.deploy_backend_service.outputs.url }}
-       backend_host: ${{ steps.deploy_backend_service.outputs.host }}
+    needs: build_backend_image 
+    
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+      
     steps:
-      - name: Checkout code 
-        uses: actions/checkout@v4 
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
-        with: {workload_identity_provider: '${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}', service_account: '${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}'}
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
+
       - name: Set up Google Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
+        
       - name: Deploy Backend to Cloud Run
-        id: deploy_backend_service 
         run: |
-          # Reconstruct the image URI using known variables
-          IMAGE_URI="${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.BACKEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
+          IMAGE_URI="${{ needs.build_backend_image.outputs.image_uri }}"
           echo "Deploying Backend Image: $IMAGE_URI"
           
           ENV_VARS="PYTHONUNBUFFERED=1"
@@ -241,61 +108,7 @@ jobs:
             --port 8000 \
             --allow-unauthenticated \
             --set-env-vars="$ENV_VARS" \
-            --vpc-connector "${{ env.VPC_CONNECTOR_NAME }}" \
-            --vpc-egress=all-traffic \
             --memory=4Gi \
             --cpu=2 \
-            --min-instances=0 \
-            --project=${{ env.GCP_PROJECT_ID }} \
-            --quiet
-            
-          # Get the URL of the deployed service
-          SERVICE_URL=$(gcloud run services describe ${{ env.BACKEND_SERVICE_NAME }} --platform managed --region ${{ env.GCP_REGION }} --format='value(status.url)' --project=${{ env.GCP_PROJECT_ID }})
-          SERVICE_HOST=$(echo $SERVICE_URL | sed -e 's|^[^/]*//||' -e 's|/.*$||') 
-          echo "Backend Service URL: $SERVICE_URL"
-          echo "Backend Service Host: $SERVICE_HOST"
-          echo "url=$SERVICE_URL" >> $GITHUB_OUTPUT
-          echo "host=$SERVICE_HOST" >> $GITHUB_OUTPUT
-
-  # 3. Deploy Frontend Service 
-  deploy_frontend:
-    name: Deploy Frontend Service
-    runs-on: ubuntu-latest
-    # Depends on images built AND backend deployed (to get its URL)
-    needs: [build_and_push_images, deploy_backend] 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    permissions: {contents: 'read', id-token: 'write'}
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with: {workload_identity_provider: '${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}', service_account: '${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}'}
-      - name: Set up Google Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-      - name: Deploy Frontend to Cloud Run
-        run: |
-          BACKEND_URL="${{ needs.deploy_backend.outputs.backend_url }}"
-          BACKEND_HOST="${{ needs.deploy_backend.outputs.backend_host }}"
-          # Reconstruct the image URI using known variables
-          IMAGE_URI="${{ env.ARTIFACT_REGISTRY_REPO }}/${{ env.FRONTEND_IMAGE_NAME }}:${{ env.IMAGE_TAG }}"
-          
-          # Check if inputs are received
-          if [ -z "$BACKEND_URL" ] || [ -z "$BACKEND_HOST" ]; then echo "::error::Backend URL/Host not received from deploy_backend job."; exit 1; fi
-          if [ -z "$IMAGE_URI" ]; then echo "::error::Frontend Image URI could not be constructed (IMAGE_TAG or other env vars missing?)."; exit 1; fi
-          
-          echo "Deploying Frontend Image: $IMAGE_URI"
-          echo "Configuring Nginx with Backend URL: $BACKEND_URL and Host: $BACKEND_HOST"
-          
-          # Deploy using the reconstructed image URI
-          gcloud run deploy ${{ env.FRONTEND_SERVICE_NAME }} \
-            --image "$IMAGE_URI" \
-            --platform managed \
-            --region ${{ env.GCP_REGION }} \
-            --port 80 \
-            --allow-unauthenticated \
-            --set-env-vars="BACKEND_SERVICE_URL=${BACKEND_URL},BACKEND_SERVICE_HOST=${BACKEND_HOST}" \
-            --memory=2Gi \
-            --cpu=1 \
             --project=${{ env.GCP_PROJECT_ID }} \
             --quiet
